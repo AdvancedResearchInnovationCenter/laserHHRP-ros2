@@ -3,8 +3,9 @@
     ros2 launch laser_hhrp hhrp.launch.py                       # real hardware
     ros2 launch laser_hhrp hhrp.launch.py simulate:=true        # no hardware
     ros2 launch laser_hhrp hhrp.launch.py hardware_trigger:=true  # Nano D3 wired to laser In1
+    ros2 launch laser_hhrp hhrp.launch.py scan_switch:=false      # no GPIO header (not on the Pi)
     ros2 launch laser_hhrp hhrp.launch.py ui:=false               # without the operator UI
-                                                                  # (Pi without a screen)
+                                                                  # (over SSH: RViz needs a display)
 
 Parameters: config/hhrp.yaml (or params_file:=...). The UI alone (e.g. on a PC): ui.launch.py.
 """
@@ -12,8 +13,8 @@ Parameters: config/hhrp.yaml (or params_file:=...). The UI alone (e.g. on a PC):
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -35,9 +36,11 @@ def generate_launch_description():
                               description="simulate the Nano and the laser"),
         DeclareLaunchArgument("hardware_trigger", default_value="false",
                               description="true: hardware sync (Nano D3 -> laser In1); false: software sync"),
+        DeclareLaunchArgument("nano_port", default_value="/dev/ttyUSB0"),
+        DeclareLaunchArgument("scan_switch", default_value="true",
+                              description="scan button + status LEDs on the Pi GPIO header"),
         DeclareLaunchArgument("ui", default_value="true",
                               description="also start RViz with the operator panel (needs a display)"),
-        DeclareLaunchArgument("nano_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("params_file", default_value=PathJoinSubstitution(
             [FindPackageShare("laser_hhrp"), "config", "hhrp.yaml"])),
 
@@ -58,6 +61,8 @@ def generate_launch_description():
         # calibration, scan control + monitoring (layer 7 logic)
         node("calibration_node"),
         node("scan_controller_node"),
+        # scan button + status LEDs (Pi GPIO)
+        node("scan_switch_node.py", condition=IfCondition(LaunchConfiguration("scan_switch"))),
         # layer 7: operator UI (RViz + panel), same as ui.launch.py
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(

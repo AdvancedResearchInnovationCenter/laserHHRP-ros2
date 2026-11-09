@@ -17,12 +17,12 @@
 
     # ---- encoder / roller ----
     encoder.counts_per_turn: 4096    # AMT222C-V 12 bit; AMT223x 14 bit = 16384
-    encoder.roller_diameter_m: 0.030 # measured by the extrinsic calibration once done
+    encoder.roller_diameter_m: 0.084 # measured by the extrinsic calibration once done
     encoder.counts_per_trigger: 4    # profile pitch = counts_per_trigger * pi * d / counts_per_turn
     encoder.direction_sign: 1        # +1 if the count increases when rolling forward
 
     # ---- laser ----
-    laser.interface: "192.168.144.15"  # scanner IP; "" = the first one found
+    laser.interface: "169.254.138.108"  # scanner IP; "" = the first one found
     laser.resolution: 1280           # points per profile
     laser.exposure_time_us: 100      # multiples of 10 us
     laser.max_profile_rate_hz: 120.0 # hardware sync never triggers faster; max speed = rate * pitch
@@ -50,6 +50,13 @@
     inspection.fastener_type: rivet
     inspection.fastener_diameter_m: 0.005
     inspection.surface_deviation_limit_m: 0.0001
+
+    # ---- scan switch + LEDs (scan_switch_node, Pi 5 GPIO header, BCM numbers) ----
+    gpio.chip: 4                     # Pi 5 header under Ubuntu 24.04 ("chip" error -> 0)
+    gpio.switch: 25                  # pin 22 -> button -> GND pin 20 (internal pull-up)
+    gpio.green: 22                   # pin 15: scanning
+    gpio.yellow: 27                  # pin 13: not scanning
+    gpio.red: 17                     # pin 11: blinks above speed.warning_fraction x max speed
 
     # ---- simulation (simulator_node) ----
     sim.speed_mps: 0.02              # simulated rolling speed
