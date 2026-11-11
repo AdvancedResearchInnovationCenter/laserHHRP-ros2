@@ -3,3 +3,8 @@ build/
 install/
 log/
 __pycache__/
+hole_detector/hole_detector_out/
+*.pcd
+*.ply
+*.csv
+
