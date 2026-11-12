@@ -582,17 +582,23 @@ class Tracker:
 
     def downsample(self, crop, frontier):
         """voxel_down of the crop, reusing voxel rows (along y) that are complete: profiles arrive in scan
-        order, so a row behind the frontier gets no more points. Only the newest rows are averaged again."""
+        order, so a row behind the frontier gets no more points. Only the newest rows, and the crop's first row
+        (cut by the crop), are averaged again. Same points in the same order as voxel_down(crop): the surface
+        fit samples by index, so a different order would move the fit."""
         voxel = self.p["voxel"]
         row = np.floor(crop[:, 1] / voxel)
+        first = row.min()
         cached = np.floor(self.voxels[:, 1] / voxel)
-        self.voxels = self.voxels[cached >= row.min()]               # rows the crop no longer reaches
-        fresh = voxel_down(crop[row >= self.voxel_row], voxel) if (row >= self.voxel_row).any() else np.empty((0, 3))
+        self.voxels = self.voxels[cached > first]                    # the crop's first row is redone below
+        redo = (row >= self.voxel_row) | (row == first)
+        fresh = voxel_down(crop[redo], voxel)
         done = np.floor(frontier / voxel)                            # rows below this are complete
-        complete = np.floor(fresh[:, 1] / voxel) < done
-        self.voxels = np.vstack((self.voxels, fresh[complete]))
+        fresh_row = np.floor(fresh[:, 1] / voxel)
+        self.voxels = np.vstack((self.voxels, fresh[(fresh_row < done) & (fresh_row > first)]))
         self.voxel_row = max(self.voxel_row, done)
-        return np.vstack((self.voxels, fresh[~complete]))
+        down = np.vstack((self.voxels, fresh[(fresh_row >= done) | (fresh_row == first)]))
+        # voxel_down's order: by voxel index x, then y, then z
+        return down[np.lexsort(np.floor(down / voxel).T[::-1])]
 
     def turn(self, lo, hi):
         """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan

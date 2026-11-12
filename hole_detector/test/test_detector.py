@@ -48,8 +48,7 @@ PARTIAL = {0.105}
 # Holes per bag from /scan/cloud_view, and how many are partial (cut by the laser's 25 mm field). a_1903's
 # edge row is only ~50 % in the field (rejected); its first and last holes lack the skin ring at the scan ends.
 PANEL = DATA.parent / "panel_12112026"
-# b_1904: one hole sits right at an unscanned band edge (partial or not by a hair; 4 since the 0.2 s cycle).
-PANEL_HOLES = {"a_1903": (13, 0), "b_1904": (12, 4)}
+PANEL_HOLES = {"a_1903": (13, 0), "b_1904": (12, 3)}
 
 
 def read_pcd(path):
