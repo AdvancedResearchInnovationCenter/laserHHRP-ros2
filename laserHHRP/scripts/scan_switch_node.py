@@ -16,6 +16,7 @@ Started by hhrp.launch.py; scan_switch:=false on a machine without the GPIO head
 from __future__ import annotations
 
 import glob
+import signal
 import sys
 
 import rclpy
@@ -176,6 +177,8 @@ def main() -> int:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # ros2 launch forwards a second SIGINT; it must not cut the LED/pin cleanup short.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.close()
         node.destroy_node()
         rclpy.try_shutdown()
