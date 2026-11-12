@@ -16,7 +16,7 @@ Visualization Manager:
       Reference Frame: laser
     - Class: rviz_default_plugins/PointCloud2
       Name: surface (depth below fit, -1..+1 mm)
-      Enabled: true
+      Enabled: false
       Topic:
         Value: /holes/surface
         Depth: 10
@@ -84,18 +84,18 @@ Visualization Manager:
       Name: boundary (hole + 5 mm ring)
       Enabled: true
       Topic:
-        Value: /holes/boundary
+        Value: /holes/boundary_view
         Depth: 5
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
       Style: Points
       Size (Pixels): 2
       Color Transformer: Intensity
       Channel Name: hole_id
       Use rainbow: true
       Autocompute Intensity Bounds: true
-      Decay Time: 100000
+      Decay Time: 0
     - Class: rviz_default_plugins/PoseArray
       Name: hole poses
       Enabled: true

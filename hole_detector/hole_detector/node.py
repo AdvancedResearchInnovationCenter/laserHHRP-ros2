@@ -17,13 +17,14 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 
 from hole_detector import results, viz
-from hole_detector.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points
+from hole_detector.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points, voxel_down
 
 try:
     from laser_hhrp.msg import InspectionResult, ScanFrame
 except ImportError:  # the node still runs on input_type cloud where laser_hhrp is not built
     InspectionResult = ScanFrame = None
 
+VIEW_VOXEL = 0.0003                # m: the RViz copy of the cut-outs
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -37,7 +38,7 @@ class HoleDetector(Node):
         self.declare_parameter("input_topic", "/scan/frame")
         self.declare_parameter("out_dir", "~/hole_detector_out")
         # The decided surface, coloured by depth below the fit: turn off on the Pi to save CPU and network.
-        self.declare_parameter("viz_surface", True)
+        self.declare_parameter("viz_surface", False)
         self.declare_parameter("period", 0.2)    # s between detection cycles (frame input)
         self.viz_surface = self.get_parameter("viz_surface").value
         self.folder = results.ScanFolder(Path(self.get_parameter("out_dir").value).expanduser(),
@@ -49,6 +50,7 @@ class HoleDetector(Node):
                   for n in DEFAULTS}
         self.tracker = Tracker(params, log=self.get_logger().info)
         self.markers, self.circles, self.poses = [], [], []
+        self.views = []                    # each hole's cut-out downsampled for RViz (/holes/boundary_view)
         self.shown_rejected = set()        # rejection ids RViz holds, so a withdrawn one can be deleted
         self.shown_bands = 0
         self.scans = 1
@@ -56,7 +58,10 @@ class HoleDetector(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/holes/markers", LATCHED)
         self.pub_circles = self.create_publisher(PointCloud2, "/holes/circles", LATCHED)
         self.pub_poses = self.create_publisher(PoseArray, "/holes/poses", LATCHED)
-        self.pub_boundary = self.create_publisher(PointCloud2, "/holes/boundary", 10)
+        self.pub_boundary = self.create_publisher(PointCloud2, "/holes/boundary", 10)   # raw, one hole per message
+        # The same cut-outs at 0.3 mm, all of the scan's in one latched cloud: what RViz draws (the raw ones are
+        # ~100k points each; a Pi's RViz stalls on millions).
+        self.pub_view = self.create_publisher(PointCloud2, "/holes/boundary_view", LATCHED)
         self.pub_surface = self.create_publisher(PointCloud2, "/holes/surface", 10)
         self.pub_progress = self.create_publisher(MarkerArray, "/holes/progress", 10)   # changes every cycle
         self.pub_result = (self.create_publisher(InspectionResult, "/inspection/result", 10)
@@ -117,6 +122,7 @@ class HoleDetector(Node):
         """Clear RViz and start a new output folder."""
         self.folder.new_scan()
         self.markers, self.circles, self.poses = [Marker(action=Marker.DELETEALL)], [], []
+        self.views = []
         self.shown_rejected, self.shown_bands = set(), 0
         self.scans += 1
         self.ruler_x = np.inf
@@ -143,8 +149,9 @@ class HoleDetector(Node):
         if new or changed:
             self.publish_state(header)
         if tracker.view is not None:
-            status = "scan %d · %d holes · %d rejected · %d bands · detect %.0f ms" % (
-                self.scans, len(tracker.holes), len(tracker.rejected), len(tracker.bands), (t2 - t1) * 1000)
+            status = "scan %d · %d holes · %.0f mm scanned · %d rejected · detect %.0f ms" % (
+                self.scans, len(tracker.holes), (tracker.frontier - tracker.start_y) * 1000, len(tracker.rejected),
+                (t2 - t1) * 1000)
             points = tracker.view["points"]
             self.ruler_x = min(self.ruler_x, points[:, 0].min() - viz.STYLE["ruler_offset"])
             ruler = viz.ruler_markers(header, *sorted(map(tracker.raw_y, (tracker.start_y, tracker.frontier))),
@@ -169,6 +176,7 @@ class HoleDetector(Node):
         if other is not None:
             self.markers += viz.distance_markers(header, hole, other)
         self.circles.append(viz.with_id(circle_points(hole), hole.id))
+        self.views.append(viz.with_id(voxel_down(hole.boundary, VIEW_VOXEL), hole.id))
         self.poses.append(viz.pose(hole.centre, hole.normal))
         self.pub_boundary.publish(viz.id_cloud(header, hole.boundary, hole.id))
         self.folder.save(hole, self.tracker.holes[hole.id - 2] if hole.id > 1 else None)
@@ -185,6 +193,8 @@ class HoleDetector(Node):
         self.pub_markers.publish(MarkerArray(markers=self.markers + rejected + withdrawn + bands))
         cloud = np.vstack(self.circles) if self.circles else np.empty((0, 4), np.float32)
         self.pub_circles.publish(point_cloud2.create_cloud(header, viz.FIELDS, cloud))
+        view = np.vstack(self.views) if self.views else np.empty((0, 4), np.float32)
+        self.pub_view.publish(point_cloud2.create_cloud(header, viz.FIELDS, view))
         self.pub_poses.publish(PoseArray(header=header, poses=self.poses))
 
 

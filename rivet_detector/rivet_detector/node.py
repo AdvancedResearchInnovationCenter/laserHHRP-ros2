@@ -18,13 +18,14 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 
 from rivet_detector import results, viz
-from rivet_detector.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points
+from rivet_detector.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points, voxel_down
 
 try:
     from laser_hhrp.msg import InspectionResult, ScanFrame
 except ImportError:  # the node still runs on input_type cloud where laser_hhrp is not built
     InspectionResult = ScanFrame = None
 
+VIEW_VOXEL = 0.0003                # m: the RViz copy of the cut-outs
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
@@ -38,7 +39,7 @@ class RivetDetector(Node):
         self.declare_parameter("input_topic", "/scan/frame")
         self.declare_parameter("out_dir", "~/hole_detector_out")
         # The decided surface, coloured by depth below the fit: turn off on the Pi to save CPU and network.
-        self.declare_parameter("viz_surface", True)
+        self.declare_parameter("viz_surface", False)
         self.declare_parameter("period", 0.2)    # s between detection cycles (frame input)
         self.viz_surface = self.get_parameter("viz_surface").value
         self.folder = results.ScanFolder(Path(self.get_parameter("out_dir").value).expanduser(),
@@ -50,6 +51,7 @@ class RivetDetector(Node):
                   for n in DEFAULTS}
         self.tracker = Tracker(params, log=self.get_logger().info)
         self.markers, self.circles, self.poses = [], [], []
+        self.views = []                    # each rivet's cut-out downsampled for RViz (/rivets/boundary_view)
         self.shown_rejected = set()        # rejection ids RViz holds, so a withdrawn one can be deleted
         self.shown_bands = 0
         self.scans = 1
@@ -57,7 +59,10 @@ class RivetDetector(Node):
         self.pub_markers = self.create_publisher(MarkerArray, "/rivets/markers", LATCHED)
         self.pub_circles = self.create_publisher(PointCloud2, "/rivets/circles", LATCHED)
         self.pub_poses = self.create_publisher(PoseArray, "/rivets/poses", LATCHED)
-        self.pub_boundary = self.create_publisher(PointCloud2, "/rivets/boundary", 10)
+        self.pub_boundary = self.create_publisher(PointCloud2, "/rivets/boundary", 10)   # raw, one rivet per message
+        # The same cut-outs at 0.3 mm, all of the scan's in one latched cloud: what RViz draws (the raw ones are
+        # ~100k points each; a Pi's RViz stalls on millions).
+        self.pub_view = self.create_publisher(PointCloud2, "/rivets/boundary_view", LATCHED)
         self.pub_surface = self.create_publisher(PointCloud2, "/rivets/surface", 10)
         self.pub_progress = self.create_publisher(MarkerArray, "/rivets/progress", 10)   # changes every cycle
         self.pub_result = (self.create_publisher(InspectionResult, "/inspection/result", 10)
@@ -118,6 +123,7 @@ class RivetDetector(Node):
         """Clear RViz and start a new output folder."""
         self.folder.new_scan()
         self.markers, self.circles, self.poses = [Marker(action=Marker.DELETEALL)], [], []
+        self.views = []
         self.shown_rejected, self.shown_bands = set(), 0
         self.scans += 1
         self.ruler_x = np.inf
@@ -144,8 +150,9 @@ class RivetDetector(Node):
         if new or changed:
             self.publish_state(header)
         if tracker.view is not None:
-            status = "scan %d · %d rivets · %d rejected · %d bands · detect %.0f ms" % (
-                self.scans, len(tracker.rivets), len(tracker.rejected), len(tracker.bands), (t2 - t1) * 1000)
+            status = "scan %d · %d rivets · %.0f mm scanned · %d rejected · detect %.0f ms" % (
+                self.scans, len(tracker.rivets), (tracker.frontier - tracker.start_y) * 1000, len(tracker.rejected),
+                (t2 - t1) * 1000)
             points = tracker.view["points"]
             self.ruler_x = min(self.ruler_x, points[:, 0].min() - viz.STYLE["ruler_offset"])
             ruler = viz.ruler_markers(header, *sorted(map(tracker.raw_y, (tracker.start_y, tracker.frontier))),
@@ -170,6 +177,7 @@ class RivetDetector(Node):
         if other is not None:
             self.markers += viz.distance_markers(header, rivet, other)
         self.circles.append(viz.with_id(circle_points(rivet), rivet.id))
+        self.views.append(viz.with_id(voxel_down(rivet.boundary, VIEW_VOXEL), rivet.id))
         self.poses.append(viz.pose(rivet.centre, rivet.normal))
         self.pub_boundary.publish(viz.id_cloud(header, rivet.boundary, rivet.id))
         self.folder.save(rivet, other)
@@ -186,6 +194,8 @@ class RivetDetector(Node):
         self.pub_markers.publish(MarkerArray(markers=self.markers + rejected + withdrawn + bands))
         cloud = np.vstack(self.circles) if self.circles else np.empty((0, 4), np.float32)
         self.pub_circles.publish(point_cloud2.create_cloud(header, viz.FIELDS, cloud))
+        view = np.vstack(self.views) if self.views else np.empty((0, 4), np.float32)
+        self.pub_view.publish(point_cloud2.create_cloud(header, viz.FIELDS, view))
         self.pub_poses.publish(PoseArray(header=header, poses=self.poses))
 
 

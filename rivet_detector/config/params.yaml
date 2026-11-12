@@ -6,7 +6,7 @@ rivet_detector:
     input_topic: /scan/frame
     out_dir: ~/hole_detector_out   # one rivet_scan_<time>/ folder per scan: summary.csv + rivet PCDs
     period: 0.2           # s between detection cycles (frame input)
-    viz_surface: true
+    viz_surface: false    # publish the decided strip coloured by depth (RViz: the surface display, off by default); costs CPU on the Pi
     voxel: 0.3
     surface_tol: 0.5      # skin band for the crop's surface fit
     grid: 0.3             # pixel size of the height image the candidates are found on

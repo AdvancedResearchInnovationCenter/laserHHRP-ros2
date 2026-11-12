@@ -5,7 +5,7 @@ hole_detector:
     input_topic: /scan/frame        # /scan/cloud_view with input_type: cloud
     out_dir: ~/hole_detector_out   # one scan_<time>/ folder per scan: summary.csv + hole PCDs
     period: 0.2           # s between detection cycles (frame input); the hole is published within one cycle
-    viz_surface: true     # publish /holes/surface (decided strip coloured by depth); false saves CPU/network on the Pi
+    viz_surface: false    # publish the decided strip coloured by depth (RViz: the surface display, off by default); costs CPU on the Pi
     voxel: 0.3            # downsample grid
     surface_tol: 0.5      # top-surface band; the top diameter is measured at this depth
     grid: 0.3             # pixel size of the 2D surface image

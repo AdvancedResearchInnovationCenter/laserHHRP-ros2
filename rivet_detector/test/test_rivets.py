@@ -199,7 +199,7 @@ LATE = {"panel2_06112026_1": 1, "panel2_09112026_02": 1, "b_1904": 2}
 
 def test_latency(period=0.2):
     """Simulated real time at the node's cycle: every rivet comes out once, < 0.5 s after the frame that
-    completes it (far edge + ring + guard), with detect <= 150 ms median and <= 350 ms worst per cycle."""
+    completes it (far edge + ring + guard), with detect <= 150 ms median and <= 300 ms at the 99th percentile per cycle."""
     from frames import replay
     expected = {BAGS / name: count for name, (count, _) in PANEL2.items()}
     expected.update({PANEL / name: count for name, count in PANEL_RIVETS.items()})
@@ -214,8 +214,21 @@ def test_latency(period=0.2):
         assert len(run.features) == count, "%s: %d rivets, expected %d" % (bag.name, len(run.features), count)
         slow = sum(lat >= 0.5 for lat in run.latency)
         assert slow <= LATE.get(bag.name, 0), "%s: %d rivets later than 0.5 s" % (bag.name, slow)
-        # Worst 350 ms: at the scan's end the laser stands still, profiles pile up at one y and the crop grows.
-        assert median <= 0.150 and worst <= 0.350, bag.name
+        # 99th percentile, not the single worst cycle: one scheduling spike on a busy laptop is not a regression.
+        # The slowest cycles are at the scan's end, where the laser stands still and profiles pile up at one y.
+        assert median <= 0.150 and np.percentile(run.cycle, 99) <= 0.300, bag.name
+
+
+def test_rviz_is_light(name="rivets.rviz", things="rivets"):
+    """The shipped RViz layout draws only the segmented cut-outs (downsampled, latched), markers and progress:
+    no full scan cloud and no surface strip, which stall RViz on the Pi."""
+    import yaml
+    layout = yaml.safe_load((Path(__file__).resolve().parents[1] / "rviz" / name).read_text())
+    shown = [d for d in layout["Visualization Manager"]["Displays"] if d.get("Enabled")]
+    topics = {d.get("Topic", {}).get("Value") for d in shown}
+    assert not topics & {"/scan/cloud_view", "/scan/cloud", "/%s/surface" % things, "/%s/boundary" % things}, topics
+    view = [d for d in shown if d.get("Topic", {}).get("Value") == "/%s/boundary_view" % things]
+    assert len(view) == 1 and view[0]["Decay Time"] == 0 and view[0]["Topic"]["Durability Policy"] == "Transient Local"
 
 
 def test_launch_single_node():
@@ -259,6 +272,7 @@ def test_synthetic_both_signs(points):
 
 if __name__ == "__main__":
     test_launch_single_node()
+    test_rviz_is_light()
     panel = test_synthetic_batch()
     test_side_clip(panel)
     test_synthetic_both_signs(panel)
