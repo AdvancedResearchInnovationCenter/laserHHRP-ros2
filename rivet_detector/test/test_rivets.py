@@ -25,10 +25,10 @@ BAGS = ROOT.parent
 PANEL2 = {"panel2_06112026_1": (9, set()), "panel2_09112026_02": (10, {8})}
 PITCH = (0.0195, 0.0215)          # neighbouring heads, along the row
 # The same kind of panel scanned with the 640-point setup (test.sc1): heads seen ~0.1 mm *below* the skin, scan
-# toward -y (cumulative /scan/cloud_view). b_1904: 10 heads; the 9th sits by the panel's end step, the 10th past
-# the scan's end. a_1903 has holes only.
+# toward -y (frames rebuilt from /scan/cloud). b_1904: 9 heads in its middle column (the one at y = -172 mm is at
+# the laser's field edge: partial) and a 10th on the panel's end step, past what can be decided. a_1903: holes only.
 PANEL = BAGS / "panel_12112026"
-PANEL_RIVETS = {"a_1903": 0, "b_1904": 8}
+PANEL_RIVETS = {"a_1903": 0, "b_1904": 9}
 # Synthetic panel: rivet heads (x, y, height, pit); a band through the last one.
 HEADS = [(0.0, 0.015, 0.00015, False), (0.0, 0.035, 0.00015, True), (0.0, 0.055, 0.00007, True),
          (0.0, 0.075, 0.00015, False)]
@@ -196,41 +196,48 @@ def test_launch_single_node():
     assert launch_nodes(ROOT / "launch" / "rivet_detector.launch.py") == [("rivet_detector", "rivet_detector")]
 
 
-def test_recessed_panel():
-    """polarity: recessed finds the sunken heads of the 640-point panel bags, once each, Ø 9 +- 1 mm, height < 0."""
-    import rosbag2_py
-    from rclpy.serialization import deserialize_message
-    from sensor_msgs.msg import PointCloud2
-    from sensor_msgs_py import point_cloud2
+def test_panel_bags_generic():
+    """Default parameters find the sunken heads of the 640-point panel bags (no polarity setting), once each,
+    Ø 9 +- 1 mm, height < 0; a_1903 (holes only, their cones read above the skin) gives none."""
+    from frames import replay
     for name, count in PANEL_RIVETS.items():
         if not (PANEL / name).exists():
             print("skip %s: not copied here" % name)
             continue
-        reader = rosbag2_py.SequentialReader()
-        reader.open(rosbag2_py.StorageOptions(uri=str(PANEL / name), storage_id="mcap"),
-                    rosbag2_py.ConverterOptions("cdr", "cdr"))
-        reader.set_filter(rosbag2_py.StorageFilter(topics=["/scan/cloud_view"]))
-        tracker = Tracker({"polarity": "recessed"}, log=lambda *_: None)
-        while reader.has_next():
-            msg = deserialize_message(reader.read_next()[1], PointCloud2)
-            xyz = point_cloud2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True)
-            tracker.feed(xyz.astype(np.float64), msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
-        rivets = tracker.rivets
-        print("%s: %d recessed rivets, heights %s mm" % (name, len(rivets), [round(r.height * 1000, 2) for r in rivets]))
-        assert len(rivets) == count
+        run = replay(PANEL / name, Tracker(log=lambda *_: None))
+        rivets = run.features
+        print("%s: %d rivets, heights %s mm, max latency %.2f s, cycle median %.0f ms worst %.0f ms" % (
+            name, len(rivets), [round(r.height * 1000, 2) for r in rivets], max(run.latency, default=0),
+            np.median(run.cycle) * 1000, max(run.cycle) * 1000))
+        assert len(rivets) == count, "%s: %d rivets, expected %d" % (name, len(rivets), count)
         assert all(r.height < 0 and 0.008 < 2 * r.radius < 0.010 for r in rivets)
         if rivets:
             steps = np.diff(sorted(r.centre[1] for r in rivets))
             assert np.all((steps > PITCH[0]) & (steps < PITCH[1])), steps
 
 
+def test_synthetic_both_signs(points):
+    """The synthetic panel and its mirror image in depth (every head sunk instead of proud) give the same heads,
+    with the height's sign flipped; the countersunk holes beside them are never heads, either way."""
+    z0 = np.median(points[:, 2])
+    for sign, cloud in ((1, points), (-1, np.column_stack((points[:, :2], 2 * z0 - points[:, 2])))):
+        rivets, _, _ = detect(cloud, dict(DEFAULTS), cloud[:, 1].min(), cloud[:, 1].max(),
+                              log=lambda *_: None, lo_is_scan_start=True)
+        found = sorted(rivets, key=lambda r: r.centre[1])
+        assert len(found) == len(HEADS), (sign, [round(r.centre[1] * 1000, 1) for r in found])
+        for rivet, (hx, hy, height, _) in zip(found, HEADS):
+            assert np.hypot(rivet.centre[0] - hx, rivet.centre[1] - hy) < 0.0003, (sign, rivet.centre)
+            assert abs(rivet.height - sign * height) < 0.00003, (sign, rivet.height)
+
+
 if __name__ == "__main__":
     test_launch_single_node()
     panel = test_synthetic_batch()
     test_side_clip(panel)
+    test_synthetic_both_signs(panel)
     found = test_synthetic_incremental(panel)
     test_boundary_is_raw(panel, found)
     test_results_have_no_nan(found)
     test_panel2_bags()
-    test_recessed_panel()
+    test_panel_bags_generic()
     print("all checks passed")

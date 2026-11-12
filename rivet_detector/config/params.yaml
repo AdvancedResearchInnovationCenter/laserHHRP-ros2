@@ -1,5 +1,5 @@
 # Lengths in mm (max_normal_angle in degrees; the edge limits below are unitless).
-# Rivet heads: round heads on the skin.
+# Rivet heads: round heads proud of the skin or sunk into it (found either way; the height is signed).
 rivet_detector:
   ros__parameters:
     input_type: frame
@@ -22,4 +22,3 @@ rivet_detector:
     min_rim_coverage: 0.6   # share of the scanned edge sectors that must hold an edge point
     max_roundness: 0.08     # edge-fit RMS / radius
     min_scanned_share: 0.6  # share of the edge outside unscanned bands; below 1 the rivet is flagged partial
-    polarity: proud         # proud: heads above the skin | recessed: below it (reported height < 0)

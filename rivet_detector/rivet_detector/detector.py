@@ -21,7 +21,7 @@ DEFAULTS = {
     "grid": 0.0003,           # pixel size of the 2D height image
     "rivet_diam": 0.009,      # nominal head diameter
     "diam_tol": 0.002,        # heads within rivet_diam +- this are rivets
-    "min_height": 0.00004,    # a head stands at least this far proud of the skin around it
+    "min_height": 0.00004,    # a head stands at least this far proud of (or sunk into) the skin around it
     "ring": 0.002,            # skin ring outside the head that must be in the crop (and holds the skin level)
     "max_depth": 0.0085,      # boundary cut: deeper points (floor seen through a nearby hole) are left out
     "boundary_margin": 0.005,  # width of the saved boundary cut-out around the head edge (output only)
@@ -31,15 +31,15 @@ DEFAULTS = {
     "min_rim_coverage": 0.6,  # share of the scanned edge sectors that must hold edge pixels
     "max_roundness": 0.08,    # edge-fit RMS / radius
     "min_scanned_share": 0.6,  # share of the edge that must lie outside unscanned bands
-    "polarity": "proud",      # proud: heads stand above the skin; recessed: they sit below it (height < 0)
 }
-UNITLESS = {"max_normal_angle", "min_rim_coverage", "max_roundness", "min_scanned_share", "polarity"}
+UNITLESS = {"max_normal_angle", "min_rim_coverage", "max_roundness", "min_scanned_share"}
 MIN_PLANE_SHARE = 0.30        # the skin must hold this share of the crop
 GRID_FOR_TRIM = 0.0003        # edge points within 2 x this of the circle are always kept
 RIM_SECTORS = 24
 MIN_SKIN_BAND = 0.00003       # the skin fit keeps points within max(4 x MAD, this) of the quadratic
 GAP_MARGIN = 0.0015           # skin this close to a gap (hole cone, part side) is left out of measurements
 EDGE_BIN = 0.0001             # radial bin of the edge profiles (raw points)
+HEAD_CLEAR = 0.0005           # a gap (hole, part side) this close outside the head edge cuts the head
 MIN_ON_PART = 0.9            # share of the head + skin ring that must hold skin points (holes, part sides fail)
 UNSCANNED_SHARE = 0.2         # a scan line with fewer points than this x the median is unscanned
 MIN_BAND_WIDTH = 0.001        # narrower runs of unscanned lines are ignored
@@ -55,7 +55,7 @@ class Rivet:
     rms: float                # edge-fit RMS
     coverage: float           # share of the scanned edge sectors that hold edge pixels
     scanned_share: float      # share of the edge outside unscanned bands
-    partial: bool             # part of the edge fell in an unscanned band
+    partial: bool             # part of the edge fell in an unscanned band, or the skin ring runs off the part
     normal: np.ndarray        # surface normal at the centre, toward the sensor
     surface: dict             # the fitted surface the head was measured on
     boundary: np.ndarray      # raw, untouched input points within radius + boundary_margin
@@ -292,8 +292,9 @@ def disc_kernel(r_in, r_out):
 
 
 def find_candidates(rel, occupied, image, p):
-    """Head candidates: a matched filter, mean height just inside the nominal edge minus just outside it. Returns (pixel index, signed response) at each local extreme where the head and its ring
-    lie on the part (holes and the part's sides fail that)."""
+    """Head candidates: a matched filter, mean height just inside the nominal edge minus just outside it.
+    Returns (pixel index, sign) at each local extreme where the head and its ring lie on the part (holes and
+    the part's sides fail that): sign +1 for a head proud of the skin, -1 for one sunk into it."""
     grid, radius = p["grid"], p["rivet_diam"] / 2
     valid = occupied & ~image["bands"][None, :] & ~image["near_gap"]
     values = np.where(valid, np.nan_to_num(rel), 0.0)
@@ -309,13 +310,16 @@ def find_candidates(rel, occupied, image, p):
 
     response = mean(head_k) - mean(ring_k)
     on_part = fftconvolve((occupied | image["bands"][None, :]).astype(float), all_k, mode="same") / all_k.sum()
-    # Holes respond strongly (both ways): drop them before looking for local maxima.
-    strength = np.where(on_part >= MIN_ON_PART, response, 0.0)
+    # Holes respond strongly (both ways): drop them before looking for local extremes.
     size = int(p["rivet_diam"] / grid) | 1
-    # The filter blurs a head whose size or centre is off: candidates at half min_height, accepted on the
-    # measured height.
-    peak = (strength == ndimage.maximum_filter(strength, size=size)) & (strength >= p["min_height"] / 2)
-    return list(np.argwhere(peak))
+    found = []
+    for sign in (1, -1):
+        strength = np.where(on_part >= MIN_ON_PART, sign * response, 0.0)
+        # The filter blurs a head whose size or centre is off: candidates at half min_height, accepted on the
+        # measured height.
+        peak = (strength == ndimage.maximum_filter(strength, size=size)) & (strength >= p["min_height"] / 2)
+        found += [(ij, sign) for ij in np.argwhere(peak)]
+    return found
 
 
 def measure_head(skin_uv, skin_h, image, centre, radius, p):
@@ -387,21 +391,19 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         return None
     lo_limit = lo if lo_is_scan_start else lo + p["guard"]
     surface, uv, depth = found
-    # Recessed heads: everything below works on the skin turned upside down, so a head is again proud.
-    sign = -1.0 if p["polarity"] == "recessed" else 1.0
-    rel, occupied, pixels, image = height_image(uv, sign * depth, p)
+    rel, occupied, pixels, image = height_image(uv, depth, p)
     full_uv, full_depth = surface_depth(points, surface)
-    full_depth = sign * full_depth
     on_skin = np.abs(full_depth) < p["surface_tol"]
     skin_uv, skin_h = full_uv[on_skin], -full_depth[on_skin]
     order = np.argsort(skin_uv[:, 1], kind="stable")          # sorted along the scan for measure_head
     skin_uv, skin_h = skin_uv[order], skin_h[order]
     rivets, rejected = [], []
     lo_d, hi_d = p["rivet_diam"] - p["diam_tol"], p["rivet_diam"] + p["diam_tol"]
-    for ij in find_candidates(rel, occupied, image, p):
+    for ij, sign in find_candidates(rel, occupied, image, p):
+        # A sunk head is measured on the skin turned upside down, so it is again proud.
         centre_2d, radius, fitted = pixel_uv(ij, image), p["rivet_diam"] / 2, None
         for _ in range(2):                                      # centre and radius settle in two passes
-            height, edges = measure_head(skin_uv, skin_h, image, centre_2d, radius, p)
+            height, edges = measure_head(skin_uv, sign * skin_h, image, centre_2d, radius, p)
             fitted = fit_rim(edges) if len(edges) >= 6 else None
             if fitted is None:
                 break
@@ -418,14 +420,16 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
             log("skip head candidate at y=%.1f mm: %s" % (centre[1] * 1000, reason))
             rejected.append(Rejected(centre, centre_2d, radius, surface, reason))
 
-        # Head + ring must be whole across the strip: the edge coverage only scores scanned lines, so a head
-        # clipped by the part's side would otherwise pass.
+        # The head must be whole across the strip: the edge coverage only scores scanned lines, so a head
+        # clipped by the part's side (or the laser's field) would otherwise pass. A gap that reaches only the
+        # skin ring (a head at the field's edge) leaves the head measurable: kept, flagged partial.
         c_px = np.floor((centre_2d - image["corner"]) / image["grid"]).astype(int)
         span = int(np.ceil(reach / image["grid"]))
         i0, j0 = np.maximum(c_px - span, 0)
         window = image["gap"][i0:c_px[0] + span + 1, j0:c_px[1] + span + 1]
         gap_uv = pixel_uv(np.argwhere(window) + [i0, j0], image)
-        if len(gap_uv) and np.hypot(*(gap_uv - centre_2d).T).min() < reach:
+        gap_dist = np.hypot(*(gap_uv - centre_2d).T).min() if len(gap_uv) else np.inf
+        if gap_dist < radius + HEAD_CLEAR:
             reject("cut by a gap or the part side")
             continue
         if not lo_d <= 2 * radius <= hi_d:
@@ -443,7 +447,7 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         # shortcut: as for holes, a margin wider than ring + guard can be clipped at the crop ends.
         boundary = (r <= radius + p["boundary_margin"]) & (np.abs(full_depth) < p["max_depth"])
         rivets.append(Rivet(centre, centre_2d, radius, sign * height, rms, coverage, scanned_share,
-                            bool(scanned_share < 1), local_normal(centre_2d, surface), surface, points[boundary]))
+                            bool(scanned_share < 1 or gap_dist < reach), local_normal(centre_2d, surface), surface, points[boundary]))
     skin = np.abs(depth) < p["surface_tol"]
     return rivets, rejected, {"points": down, "depth": depth, "bands": band_corners(image, uv[skin], surface)}
 
