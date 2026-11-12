@@ -42,6 +42,8 @@ MIN_DEEP_POINTS = 30          # a non-empty hole middle needs this many points..
 MIN_DEEP_SHARE = 0.1          # ...and this share of its points deeper than min_hole_depth
 MIN_CONE_SPREAD = 0.15        # countersink: the cone wall spans this share of the radius...
 MAX_CONE_CORR = -0.6          # ...and its depth falls steadily with radius (cones -0.75..-1, plain -0.1..-0.35)
+FOOT_HEIGHT = 0.00005         # mirrored cone: its foot (the top rim) is where it sinks below this above the skin
+FOOT_BIN = 0.0001             # radial bin of the foot search
 
 
 @dataclass
@@ -254,7 +256,9 @@ def rim_coverage(rim_xy, centre, radius, image):
     angle = np.arctan2(rim_xy[:, 1] - centre[1], rim_xy[:, 0] - centre[0])
     covered = set(np.floor((angle + np.pi) / (2 * np.pi) * RIM_SECTORS).astype(int) % RIM_SECTORS)
     middle = -np.pi + (np.arange(RIM_SECTORS) + 0.5) * 2 * np.pi / RIM_SECTORS
-    scanned = set(np.flatnonzero(scanned_at(centre[1] + radius * np.sin(middle), image)))
+    u_lo, u_hi = image.get("u_range", (-np.inf, np.inf))     # the laser's field across the scan
+    u = centre[0] + radius * np.cos(middle)
+    scanned = set(np.flatnonzero(scanned_at(centre[1] + radius * np.sin(middle), image) & (u > u_lo) & (u < u_hi)))
     # Sector k spans angle -pi + k*15deg; +v (scan forward) is +90deg, -v is -90deg.
     ends = {RIM_SECTORS // 4 - 1, RIM_SECTORS // 4}, {3 * RIM_SECTORS // 4 - 1, 3 * RIM_SECTORS // 4}
     both_ends = all(e & covered or not e & scanned for e in ends)
@@ -283,6 +287,37 @@ def is_hole(r, depth, centre, radius, image, p):
         return True
     deep = core & (depth > p["min_hole_depth"]) & (depth < p["max_depth"])
     return deep.sum() >= MIN_DEEP_POINTS and deep.sum() >= MIN_DEEP_SHARE * core.sum()
+
+
+def mirrored_cone(r, depth, radius, p):
+    """A countersink seen mirrored, as a cone standing above the skin (a laser artefact of long exposures):
+    the wall test of is_countersunk on the height above the skin."""
+    return is_countersunk(r, -depth, radius, p)
+
+
+def cone_foot(uv, depth, centre, radius, p):
+    """Top rim of a mirrored cone: per rim sector, walking out from the gap, the first radial bin whose
+    median height above the skin is below FOOT_HEIGHT. Returns those points (2D), one per sector found."""
+    rel = uv - centre
+    r = np.hypot(rel[:, 0], rel[:, 1])
+    near = (r > 0.8 * radius) & (r < radius + p["ring"])
+    r, depth = r[near], depth[near]
+    angle = np.arctan2(rel[near, 1], rel[near, 0])
+    sector = np.floor((angle + np.pi) / (2 * np.pi) * RIM_SECTORS).astype(int) % RIM_SECTORS
+    feet = []
+    for k in range(RIM_SECTORS):
+        mine = sector == k
+        if mine.sum() < 10:
+            continue
+        bins = np.floor((r[mine] - 0.8 * radius) / FOOT_BIN).astype(int)
+        heights = [np.median(-depth[mine][bins == b]) if np.any(bins == b) else np.nan for b in range(bins.max() + 1)]
+        low = np.flatnonzero(np.array(heights) < FOOT_HEIGHT)
+        if len(low) == 0:
+            continue
+        foot = 0.8 * radius + low[0] * FOOT_BIN
+        middle = -np.pi + (k + 0.5) * 2 * np.pi / RIM_SECTORS
+        feet.append(centre + foot * np.array([np.cos(middle), np.sin(middle)]))
+    return np.array(feet)
 
 
 def is_countersunk(r, depth, radius, p):
@@ -333,6 +368,7 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
     surface, uv, depth = found
     on_surface = np.abs(depth) < p["surface_tol"]
     openings, pixels, image = find_openings(uv, on_surface, p)
+    image["u_range"] = (uv[:, 0].min(), uv[:, 0].max())
     full_uv, full_depth = surface_depth(points, surface)
     holes, rejected = [], []
     for region in openings:
@@ -361,10 +397,22 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
             reject("rim %.0f%% of %.0f%% scanned" % (coverage * 100, scanned_share * 100))
             continue
         r = np.linalg.norm(full_uv - centre_2d, axis=1)
-        if not is_hole(r, full_depth, centre_2d, radius, image, p):
+        # The cone tests use the skin just outside the ring as zero: the crop's surface fit can be off by
+        # a tenth of a millimetre on a long, bent panel.
+        outer = (r > radius + p["ring"] / 2) & (r < radius + p["ring"]) & (np.abs(full_depth) < p["surface_tol"])
+        local = full_depth - (np.median(full_depth[outer]) if outer.any() else 0.0)
+        mirrored = mirrored_cone(r, local, radius, p)
+        if not mirrored and not is_hole(r, full_depth, centre_2d, radius, image, p):
             reject("shallow dent")
             continue
-        countersunk = is_countersunk(r, full_depth, radius, p)
+        if mirrored:     # the cone stands above the skin: the top rim is its foot, not the 0.5 mm level
+            feet = cone_foot(full_uv, local, centre_2d, radius, p)
+            refit = fit_rim(feet) if len(feet) >= 6 else None
+            if refit is not None and radius <= refit[1] <= radius + p["ring"] / 2 and refit[2] <= p["max_roundness"] * refit[1]:
+                centre_2d, radius, rms = refit[:3]
+                centre = to_3d(centre_2d, 0.0, surface)
+                r = np.linalg.norm(full_uv - centre_2d, axis=1)
+        countersunk = mirrored or is_countersunk(r, full_depth, radius, p)
         if p["hole_type"] != "any" and countersunk != (p["hole_type"] == "countersunk"):
             reject("not " + p["hole_type"])
             continue
@@ -397,6 +445,30 @@ def circle_points(hole, n=180):
     return np.array([to_3d(hole.centre_2d + hole.radius * d, 0.0, hole.surface) for d in unit])
 
 
+def mirror(points):
+    """(x, y, z) -> (-x, -y, z): a 180 degree turn about z, its own inverse and exact in floating point."""
+    return points * np.array([-1.0, -1.0, 1.0])
+
+
+def mirror_back(items):
+    """Results found on a mirrored cloud, in the cloud frame again (each surface turned once)."""
+    surfaces = {}
+    for item in items:
+        key = id(item.surface)
+        if key not in surfaces:
+            f = item.surface
+            surfaces[key] = dict(f, origin=mirror(f["origin"]), axes=mirror(f["axes"]), normal=mirror(f["normal"]))
+        item.surface = surfaces[key]
+        item.centre = mirror(item.centre)
+        if hasattr(item, "normal"):
+            item.normal, item.boundary = mirror(item.normal), mirror(item.boundary)
+    return items
+
+
+def mirror_view(view):
+    return dict(view, points=mirror(view["points"]), bands=[mirror(b) for b in view["bands"]])
+
+
 class Tracker:
     """Feeds cumulative clouds to `detect` strip by strip; reports each hole once.
 
@@ -414,6 +486,8 @@ class Tracker:
         self.frontier = -np.inf
         self.start_y = np.inf      # where this scan began (a trimmed cloud no longer shows it)
         self.stamp = -np.inf
+        self.sign = 1              # scan direction: +1 = +y; -1 = -y (worked on mirrored, see feed)
+        self.y_range = None        # raw y extent of the previous cloud
         self.holes = []
         self.rejected = []
         self.strip = self.view = None
@@ -433,13 +507,24 @@ class Tracker:
         points = points[np.isfinite(points).all(axis=1)]
         if len(points) == 0:
             return False, []
-        y = points[:, 1]
-        # shortcut: max y as the frontier assumes no stray points ahead of the scan; use a percentile if they appear.
-        frontier = y.max()
-        was_reset = stamp < self.stamp or frontier < self.frontier - 0.010
+        raw_y = points[:, 1]
+        top = raw_y.max() if self.sign > 0 else -raw_y.min()    # the frontier, in the worked-on frame
+        lo, hi = raw_y.min(), raw_y.max()
+        # A new scan that runs back the other way starts at the old frontier: the cloud shrinks to a short
+        # stretch at one end. FrameCloud.trim also shrinks it, but never below ~70 mm (guard + reach + 10 mm).
+        turned_back = self.y_range is not None and hi - lo < 0.030 and (
+            lo > self.y_range[0] + 0.010 or hi < self.y_range[1] - 0.010)
+        was_reset = stamp < self.stamp or top < self.frontier - 0.010 or turned_back
         if was_reset:
             self.log("new scan detected: reset")
             self.reset()
+        self.turn(lo, hi)
+        s = self.sign
+        if s < 0:   # a -y scan is worked on mirrored, (x, y) -> (-x, -y): exact, and the logic below stays +y
+            points = mirror(points)
+        y = points[:, 1]
+        # shortcut: max y as the frontier assumes no stray points ahead of the scan; use a percentile if they appear.
+        frontier = y.max()
         self.stamp, self.frontier = stamp, frontier
         self.start_y = min(self.start_y, y.min())
         overlap = p["max_diam"] / 2 + p["ring"] + p["guard"]
@@ -450,6 +535,8 @@ class Tracker:
         if found is None:
             return was_reset, []         # nothing decided: keep done_y, so this strip is retried
         holes, rejected, self.view = found
+        if s < 0:
+            holes, rejected, self.view = mirror_back(holes), mirror_back(rejected), mirror_view(self.view)
         down, depth = self.view["points"], self.view["depth"]
         new = [hole for hole in holes if not self.seen(hole, self.holes)]
         for hole in new:
@@ -461,10 +548,10 @@ class Tracker:
         self.done_y = max(self.done_y, frontier - p["guard"] - p["max_diam"] - p["ring"])
         # Points behind the frontier never change (no back-fill), so the view need not wait for done_y.
         shown, self.shown_y = self.shown_y, max(self.shown_y, frontier - p["guard"])
-        new_band = (down[:, 1] >= shown) & (down[:, 1] < self.shown_y) & (np.abs(depth) < p["max_depth"])
+        new_band = (s * down[:, 1] >= shown) & (s * down[:, 1] < self.shown_y) & (np.abs(depth) < p["max_depth"])
         self.strip = down[new_band], depth[new_band]
         for band in self.view["bands"]:
-            if band[:, 1].max() < self.shown_y:      # wholly behind the laser: it will not fill any more
+            if (s * band[:, 1]).max() < self.shown_y:      # wholly behind the laser: it will not fill any more
                 self.add_band(band)
         for gap in rejected:
             if self.seen(gap, self.holes):
@@ -478,6 +565,24 @@ class Tracker:
                 gap.id = self.rejections
                 self.rejected.append(gap)
         return was_reset, new
+
+    def turn(self, lo, hi):
+        """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan
+        (the low end grows by 2 mm more than the high end) restarts the progress, mirrored; what was
+        already found stays and is deduplicated as usual."""
+        if self.y_range is not None:
+            grow_lo, grow_hi = self.y_range[0] - lo, hi - self.y_range[1]
+            sign = -1 if grow_lo > grow_hi + 0.002 else 1 if grow_hi > grow_lo + 0.002 else self.sign
+            if sign != self.sign:
+                self.log("scan runs toward %sy" % ("+" if sign > 0 else "-"))
+                self.sign = sign
+                self.done_y = self.frontier = self.shown_y = -np.inf
+                self.start_y = np.inf
+        self.y_range = (lo, hi)
+
+    def raw_y(self, y):
+        """A progress value (done_y, frontier, start_y) as y in the cloud frame."""
+        return self.sign * y
 
     def add_band(self, band):
         """Keep each band once; a band seen again (overlapping in y) keeps the wider of the two views."""
@@ -520,7 +625,7 @@ class FrameCloud:
         line = tracker.done_y - (p["max_diam"] / 2 + p["ring"] + p["guard"]) - 0.010
         cloud = self.cloud()
         if len(cloud) and np.isfinite(line):
-            self.chunks = [cloud[cloud[:, 1] >= line]]
+            self.chunks = [cloud[tracker.sign * cloud[:, 1] >= line]]
 
     def clear(self):
         self.chunks = []

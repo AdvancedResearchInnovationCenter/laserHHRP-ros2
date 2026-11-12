@@ -26,13 +26,18 @@ BAGS = ROOT.parent
 # decided (as for holes at the scan end). panel2_09's #8 is cut by an unscanned band.
 PANEL2 = {"panel2_06112026_1": (9, set()), "panel2_09112026_02": (10, {8})}
 PITCH = (0.0195, 0.0215)          # neighbouring heads, along the row
-# Hole detector files that must stay byte-identical (recorded before the rivet work started).
-HOLE_MD5 = {"hole_detector/detector.py": "45c6d8faf3535d1251cac47412c162b8",
-            "hole_detector/node.py": "fa411e97b41d7a1ba223be26c1ae82e7",
+# The same kind of panel scanned with the 640-point setup (test.sc1): heads seen ~0.1 mm *below* the skin, scan
+# toward -y (cumulative /scan/cloud_view). b_1904: 10 heads; the 9th sits by the panel's end step, the 10th past
+# the scan's end. a_1903 has holes only.
+PANEL = BAGS / "panel_12112026"
+PANEL_RIVETS = {"a_1903": 0, "b_1904": 8}
+# Hole detector files that must stay byte-identical (re-recorded 2026-11-12: -y scans, mirrored countersinks).
+HOLE_MD5 = {"hole_detector/detector.py": "e8694e8d4e9ada5a18efa504aabf2200",
+            "hole_detector/node.py": "4cc294409b589fb54fa64539ae6e624e",
             "hole_detector/viz.py": "31b51994f635d8900f10172be8434f0a",
             "hole_detector/results.py": "26de5db041e99a788b2d7373084a2425",
             "rviz/holes.rviz": "b8dc41212446fdc28b29a9352d95b320",
-            "test/test_detector.py": "5ff8e637638e170ec4ac74be194b006e"}
+            "test/test_detector.py": "a0789df4da96a6b119c6a0d9de707613"}
 # Synthetic panel: rivet heads (x, y, height, pit); a band through the last one.
 HEADS = [(0.0, 0.015, 0.00015, False), (0.0, 0.035, 0.00015, True), (0.0, 0.055, 0.00007, True),
          (0.0, 0.075, 0.00015, False)]
@@ -183,7 +188,35 @@ def test_launch_mode():
     launch_file = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(launch_file)
     assert launch_file.file_mode(ROOT / "config" / "params.yaml") == "holes"
-    assert set(launch_file.MODES) == {"holes", "rivets"}
+    assert set(launch_file.MODES) == {"holes", "rivets", "both"}
+
+
+def test_recessed_panel():
+    """polarity: recessed finds the sunken heads of the 640-point panel bags, once each, Ø 9 +- 1 mm, height < 0."""
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import PointCloud2
+    from sensor_msgs_py import point_cloud2
+    for name, count in PANEL_RIVETS.items():
+        if not (PANEL / name).exists():
+            print("skip %s: not copied here" % name)
+            continue
+        reader = rosbag2_py.SequentialReader()
+        reader.open(rosbag2_py.StorageOptions(uri=str(PANEL / name), storage_id="mcap"),
+                    rosbag2_py.ConverterOptions("cdr", "cdr"))
+        reader.set_filter(rosbag2_py.StorageFilter(topics=["/scan/cloud_view"]))
+        tracker = Tracker({"polarity": "recessed"}, log=lambda *_: None)
+        while reader.has_next():
+            msg = deserialize_message(reader.read_next()[1], PointCloud2)
+            xyz = point_cloud2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True)
+            tracker.feed(xyz.astype(np.float64), msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+        rivets = tracker.rivets
+        print("%s: %d recessed rivets, heights %s mm" % (name, len(rivets), [round(r.height * 1000, 2) for r in rivets]))
+        assert len(rivets) == count
+        assert all(r.height < 0 and 0.008 < 2 * r.radius < 0.010 for r in rivets)
+        if rivets:
+            steps = np.diff(sorted(r.centre[1] for r in rivets))
+            assert np.all((steps > PITCH[0]) & (steps < PITCH[1])), steps
 
 
 def test_hole_detector_untouched():
@@ -200,4 +233,5 @@ if __name__ == "__main__":
     test_boundary_is_raw(panel, found)
     test_results_have_no_nan(found)
     test_panel2_bags()
+    test_recessed_panel()
     print("all checks passed")

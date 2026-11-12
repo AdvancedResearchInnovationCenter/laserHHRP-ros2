@@ -39,6 +39,11 @@ BANDS = [(0.1035, 0.1065), (0.183, 0.186)]     # unscanned: through the y=105 ho
 DENT = (0.170, 0.008)                          # 0.5 mm deep, must not be found
 POCKET = (-0.012, 0.015, 0.006, 0.0008)        # x, y, diameter, depth: a flat 0.8 mm pocket is a gap, rejected as a dent
 PARTIAL = {0.105}
+# Panel bags from the 640-point setup (test.sc1): scans run toward -y, countersinks show as cones above the skin.
+# Holes per bag from /scan/cloud_view, and how many are partial (cut by the laser's 25 mm field). a_1903's
+# edge row is only ~50 % in the field (rejected); its first and last holes lack the skin ring at the scan ends.
+PANEL = DATA.parent / "panel_12112026"
+PANEL_HOLES = {"a_1903": (13, 0), "b_1904": (12, 3)}
 
 
 def read_pcd(path):
@@ -185,6 +190,30 @@ def test_synthetic_incremental():
     assert tracker.rejected == [] and tracker.holes == []
 
 
+def test_reverse_scan():
+    """The plate scanned toward -y (mirrored about z): the same holes, mirrored, each once; raw boundaries."""
+    points = synthetic_plate() * [-1.0, -1.0, 1.0]
+    tracker, found = Tracker(log=lambda *_: None), []
+    for i, end in enumerate(np.arange(0.01, -points[:, 1].min() + 0.01, 0.01)):
+        found += tracker.feed(points[points[:, 1] >= -end], float(i))[1]
+    assert tracker.sign == -1
+    raw = {p.tobytes() for p in points}
+    assert all(p.tobytes() in raw for h in found for p in h.boundary), "boundary points not raw"
+    for hole in found:
+        hole.centre = hole.centre * [-1.0, -1.0, 1.0]
+    check_plate(found, PLATE)
+    # Back again (+y) from where the -y scan ended: a new scan (reset), every hole found again.
+    length = -points[:, 1].min()
+    back, found, resets = synthetic_plate() - [0.0, length, 0.0], [], 0
+    for i, end in enumerate(np.arange(0.01, length + 0.01, 0.01)):
+        reset, new = tracker.feed(back[back[:, 1] <= end - length], 100.0 + i)
+        resets, found = resets + reset, found + new
+    assert resets == 1 and tracker.sign == 1
+    for hole in found:
+        hole.centre = hole.centre + [0.0, length, 0.0]
+    check_plate(found, PLATE)
+
+
 def test_rejection_reported_once():
     """Fed in 2 mm steps, the pocket is re-examined on several overlapping crops but listed once;
     a listed rejection that later passes as a hole is dropped from the list."""
@@ -251,6 +280,30 @@ def test_crop_edge_is_not_a_rejection():
     for i, end in enumerate((0.10, 0.108)):         # the y=105 hole (5 mm radius) is cut at both ends
         tracker.feed(points[points[:, 1] <= end], float(i))
         assert not any(abs(g.centre[1] - 0.105) < 0.003 for g in tracker.rejected), tracker.rejected
+
+
+def test_panel_bags():
+    """Reverse (-y) scans with mirrored countersinks: every fully seen hole once, countersunk, Ø 8-10.5 mm."""
+    for name, (count, partial) in PANEL_HOLES.items():
+        if not (PANEL / name).exists():
+            print("skip %s: not copied here" % name)
+            continue
+        tracker, slowest = Tracker(log=lambda *_: None), 0.0
+        for stamp, xyz in bag_clouds(PANEL / name):
+            t0 = time.time()
+            reset, _ = tracker.feed(xyz, stamp)
+            slowest = max(slowest, time.time() - t0)
+            assert not reset
+        holes = tracker.holes
+        diam = [2000 * h.radius for h in holes]
+        print("%s: %d holes (%d partial), Ø %.2f-%.2f mm, slowest feed %.2f s" % (
+            name, len(holes), sum(h.partial for h in holes), min(diam), max(diam), slowest))
+        assert tracker.sign == -1
+        assert len(holes) == count and sum(h.partial for h in holes) == partial
+        assert all(h.countersunk for h in holes) and 8.0 < min(diam) and max(diam) < 10.5
+        xy = np.array([h.centre[:2] for h in holes])
+        gaps = np.linalg.norm(xy[:, None] - xy[None], axis=2) + np.eye(len(xy))
+        assert gaps.min() > 0.010, "a hole reported twice"
 
 
 def test_real_bag_counts():
@@ -419,6 +472,7 @@ if __name__ == "__main__":
     test_empty_cloud_is_ignored()
     test_synthetic_plate()
     test_synthetic_incremental()
+    test_reverse_scan()
     test_rejection_reported_once()
     test_crop_edge_is_not_a_rejection()
     test_surface_strips()
@@ -431,4 +485,5 @@ if __name__ == "__main__":
     test_real_bag_counts()
     test_flap_from_frames(test_replay_matches_baseline())
     test_boundary_margin()
+    test_panel_bags()
     print("all checks passed")

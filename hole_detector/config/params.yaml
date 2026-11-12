@@ -24,7 +24,7 @@ hole_detector:
     max_roundness: 0.08     # rim-fit RMS / radius
     min_scanned_share: 0.6  # share of the rim outside unscanned bands; below 1 the hole is flagged partial
 
-# Which detector `hole_detector.launch.py` starts: holes (the node above) | rivets (the node below).
+# Which detector `hole_detector.launch.py` starts: holes (the node above) | rivets (the node below) | both.
 # Read by the launch file only (no node is named detector_mode); `mode:=` on the launch line overrides it.
 detector_mode:
   ros__parameters:
@@ -53,3 +53,4 @@ rivet_detector:
     min_rim_coverage: 0.6   # share of the scanned edge sectors that must hold an edge point
     max_roundness: 0.08     # edge-fit RMS / radius
     min_scanned_share: 0.6  # share of the edge outside unscanned bands; below 1 the rivet is flagged partial
+    polarity: proud         # proud: heads above the skin | recessed: below it (reported height < 0)

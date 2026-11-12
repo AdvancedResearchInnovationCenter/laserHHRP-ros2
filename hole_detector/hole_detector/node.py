@@ -145,9 +145,10 @@ class HoleDetector(Node):
                 self.scans, len(tracker.holes), len(tracker.rejected), len(tracker.bands), (t2 - t1) * 1000)
             points = tracker.view["points"]
             self.ruler_x = min(self.ruler_x, points[:, 0].min() - viz.STYLE["ruler_offset"])
-            ruler = viz.ruler_markers(header, tracker.start_y, tracker.frontier, self.ruler_x, np.median(points[:, 2]))
+            ruler = viz.ruler_markers(header, *sorted(map(tracker.raw_y, (tracker.start_y, tracker.frontier))),
+                                      self.ruler_x, np.median(points[:, 2]))
             self.pub_progress.publish(MarkerArray(markers=viz.progress_markers(
-                header, points, tracker.done_y, tracker.frontier, status) + ruler))
+                header, points, tracker.raw_y(tracker.done_y), tracker.raw_y(tracker.frontier), status) + ruler))
         surface_kb = 0
         if self.viz_surface and self.tracker.strip is not None and len(self.tracker.strip[0]):
             cloud = viz.surface_cloud(header, *self.tracker.strip)

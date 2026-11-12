@@ -7,6 +7,7 @@
     ros2 launch laser_hhrp hhrp.launch.py ui:=false               # without the operator UI
                                                                   # (over SSH: RViz needs a display)
     ros2 launch laser_hhrp hhrp.launch.py mode:=rivets            # rivet heads instead of holes
+    ros2 launch laser_hhrp hhrp.launch.py mode:=both              # holes and rivets (a panel with both)
     ros2 launch laser_hhrp hhrp.launch.py holes:=false            # without hole/rivet detection
 
 Parameters: config/hhrp.yaml (or params_file:=...). The UI alone (e.g. on a PC): ui.launch.py.
@@ -42,7 +43,7 @@ def generate_launch_description():
         DeclareLaunchArgument("holes", default_value="true",
                               description="also run hole/rivet detection (hole_detector package)"),
         DeclareLaunchArgument("mode", default_value="",
-                              description="holes | rivets (empty: detector_mode in hole_detector/config/params.yaml)"),
+                              description="holes | rivets | both (empty: detector_mode in hole_detector/config/params.yaml)"),
         DeclareLaunchArgument("holes_out_dir",
                               default_value="~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out",
                               description="where detection saves its scan folders"),

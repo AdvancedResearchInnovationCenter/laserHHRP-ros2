@@ -40,10 +40,10 @@ ros2 run hole_detector hole_detector --ros-args --params-file <params.yaml> -p i
 ```yaml
 detector_mode:
   ros__parameters:
-    mode: holes      # or rivets
+    mode: holes      # or rivets, or both (a panel with holes and rivets: both nodes run side by side)
 ```
 
-`mode:=rivets` on the launch line overrides it (`colcon build` once after pulling, for the new entry point):
+`mode:=rivets` (or `mode:=both`) on the launch line overrides it (`colcon build` once after pulling, for the new entry point):
 
 ```bash
 ros2 launch hole_detector hole_detector.launch.py mode:=rivets rviz:=true
@@ -56,6 +56,7 @@ ros2 bag play /bags/panel2_09112026_02 --topics /scan/frame
   - `rivet_diam`: nominal head Ø, 9 mm.
   - `diam_tol`: accepted ± around `rivet_diam`, 2 mm.
   - `min_height`: lowest head accepted, 0.04 mm.
+  - `polarity`: `proud` (default) or `recessed`, for heads seen *below* the skin. With the laser's `test.sc1` setup the panel's heads read about 0.1 mm below the skin (the countersinks also read as cones standing above it: the setup seems to flip the laser's Z), so use `recessed` there; the reported height is then negative.
   - `ring`: the skin ring beyond the head, 2 mm.
   - The edge acceptance limits work as for holes.
 - **How it works:**

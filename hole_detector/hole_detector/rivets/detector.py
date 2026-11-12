@@ -31,8 +31,9 @@ DEFAULTS = {
     "min_rim_coverage": 0.6,  # share of the scanned edge sectors that must hold edge pixels
     "max_roundness": 0.08,    # edge-fit RMS / radius
     "min_scanned_share": 0.6,  # share of the edge that must lie outside unscanned bands
+    "polarity": "proud",      # proud: heads stand above the skin; recessed: they sit below it (height < 0)
 }
-UNITLESS = {"max_normal_angle", "min_rim_coverage", "max_roundness", "min_scanned_share"}
+UNITLESS = {"max_normal_angle", "min_rim_coverage", "max_roundness", "min_scanned_share", "polarity"}
 MIN_PLANE_SHARE = 0.30        # the skin must hold this share of the crop
 GRID_FOR_TRIM = 0.0003        # edge points within 2 x this of the circle are always kept
 RIM_SECTORS = 24
@@ -50,7 +51,7 @@ class Rivet:
     centre: np.ndarray        # head centre on top of the head (3D)
     centre_2d: np.ndarray     # the same in the surface's (u, v) coordinates
     radius: float             # head radius at half height
-    height: float             # head height above the local skin ring
+    height: float             # head height above the local skin ring (negative: recessed head)
     rms: float                # edge-fit RMS
     coverage: float           # share of the scanned edge sectors that hold edge pixels
     scanned_share: float      # share of the edge outside unscanned bands
@@ -386,8 +387,11 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         return None
     lo_limit = lo if lo_is_scan_start else lo + p["guard"]
     surface, uv, depth = found
-    rel, occupied, pixels, image = height_image(uv, depth, p)
+    # Recessed heads: everything below works on the skin turned upside down, so a head is again proud.
+    sign = -1.0 if p["polarity"] == "recessed" else 1.0
+    rel, occupied, pixels, image = height_image(uv, sign * depth, p)
     full_uv, full_depth = surface_depth(points, surface)
+    full_depth = sign * full_depth
     on_skin = np.abs(full_depth) < p["surface_tol"]
     skin_uv, skin_h = full_uv[on_skin], -full_depth[on_skin]
     order = np.argsort(skin_uv[:, 1], kind="stable")          # sorted along the scan for measure_head
@@ -405,7 +409,7 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         if fitted is None or height < p["min_height"]:
             continue                                   # not a head: weak candidates are noise, not rejections
         centre_2d, radius, rms, rim_xy = fitted
-        centre = to_3d(centre_2d, -height, surface)
+        centre = to_3d(centre_2d, -sign * height, surface)
         reach = radius + p["ring"]
         if centre[1] - reach < lo_limit or centre[1] + reach > hi - p["guard"]:
             continue                                   # not fully scanned (or at the crop's open end)
@@ -438,10 +442,34 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         # Raw, untouched points in the cylinder edge + margin; only the floor seen through a nearby hole is cut.
         # shortcut: as for holes, a margin wider than ring + guard can be clipped at the crop ends.
         boundary = (r <= radius + p["boundary_margin"]) & (np.abs(full_depth) < p["max_depth"])
-        rivets.append(Rivet(centre, centre_2d, radius, height, rms, coverage, scanned_share,
+        rivets.append(Rivet(centre, centre_2d, radius, sign * height, rms, coverage, scanned_share,
                             bool(scanned_share < 1), local_normal(centre_2d, surface), surface, points[boundary]))
     skin = np.abs(depth) < p["surface_tol"]
     return rivets, rejected, {"points": down, "depth": depth, "bands": band_corners(image, uv[skin], surface)}
+
+
+def mirror(points):
+    """(x, y, z) -> (-x, -y, z): a 180 degree turn about z, its own inverse and exact in floating point."""
+    return points * np.array([-1.0, -1.0, 1.0])
+
+
+def mirror_back(items):
+    """Results found on a mirrored cloud, in the cloud frame again (each surface turned once)."""
+    surfaces = {}
+    for item in items:
+        key = id(item.surface)
+        if key not in surfaces:
+            f = item.surface
+            surfaces[key] = dict(f, origin=mirror(f["origin"]), axes=mirror(f["axes"]), normal=mirror(f["normal"]))
+        item.surface = surfaces[key]
+        item.centre = mirror(item.centre)
+        if hasattr(item, "normal"):
+            item.normal, item.boundary = mirror(item.normal), mirror(item.boundary)
+    return items
+
+
+def mirror_view(view):
+    return dict(view, points=mirror(view["points"]), bands=[mirror(b) for b in view["bands"]])
 
 
 class Tracker:
@@ -463,6 +491,8 @@ class Tracker:
         self.frontier = -np.inf
         self.start_y = np.inf
         self.stamp = -np.inf
+        self.sign = 1              # scan direction: +1 = +y; -1 = -y (worked on mirrored, see feed)
+        self.y_range = None        # raw y extent of the previous cloud
         self.rivets = []           # the accepted rivets of this scan
         self.rejected = []
         self.strip = self.view = None
@@ -477,13 +507,24 @@ class Tracker:
         points = points[np.isfinite(points).all(axis=1)]
         if len(points) == 0:
             return False, []
-        y = points[:, 1]
-        # shortcut: max y as the frontier assumes no stray points ahead of the scan; use a percentile if they appear.
-        frontier = y.max()
-        was_reset = stamp < self.stamp or frontier < self.frontier - 0.010
+        raw_y = points[:, 1]
+        top = raw_y.max() if self.sign > 0 else -raw_y.min()    # the frontier, in the worked-on frame
+        lo, hi = raw_y.min(), raw_y.max()
+        # A new scan that runs back the other way starts at the old frontier: the cloud shrinks to a short
+        # stretch at one end. FrameCloud.trim also shrinks it, but never below ~70 mm (guard + reach + 10 mm).
+        turned_back = self.y_range is not None and hi - lo < 0.030 and (
+            lo > self.y_range[0] + 0.010 or hi < self.y_range[1] - 0.010)
+        was_reset = stamp < self.stamp or top < self.frontier - 0.010 or turned_back
         if was_reset:
             self.log("new scan detected: reset")
             self.reset()
+        self.turn(lo, hi)
+        s = self.sign
+        if s < 0:   # a -y scan is worked on mirrored, (x, y) -> (-x, -y): exact, and the logic below stays +y
+            points = mirror(points)
+        y = points[:, 1]
+        # shortcut: max y as the frontier assumes no stray points ahead of the scan; use a percentile if they appear.
+        frontier = y.max()
         self.stamp, self.frontier = stamp, frontier
         self.start_y = min(self.start_y, y.min())
         overlap = self.reach + p["guard"]
@@ -494,6 +535,8 @@ class Tracker:
         if found is None:
             return was_reset, []
         rivets, rejected, self.view = found
+        if s < 0:
+            rivets, rejected, self.view = mirror_back(rivets), mirror_back(rejected), mirror_view(self.view)
         down, depth = self.view["points"], self.view["depth"]
         new = [r for r in rivets if not self.seen(r, self.rivets)]
         for rivet in new:
@@ -502,10 +545,10 @@ class Tracker:
             self.rejected = [old for old in self.rejected if not self.on_rivet(old, [rivet])]
         self.done_y = max(self.done_y, frontier - p["guard"] - 2 * self.reach)
         shown, self.shown_y = self.shown_y, max(self.shown_y, frontier - p["guard"])
-        new_band = (down[:, 1] >= shown) & (down[:, 1] < self.shown_y) & (np.abs(depth) < p["max_depth"])
+        new_band = (s * down[:, 1] >= shown) & (s * down[:, 1] < self.shown_y) & (np.abs(depth) < p["max_depth"])
         self.strip = down[new_band], depth[new_band]
         for band in self.view["bands"]:
-            if band[:, 1].max() < self.shown_y:
+            if (s * band[:, 1]).max() < self.shown_y:
                 self.add_band(band)
         for gap in rejected:
             if self.on_rivet(gap, self.rivets):
@@ -519,6 +562,24 @@ class Tracker:
                 gap.id = self.rejections
                 self.rejected.append(gap)
         return was_reset, new
+
+    def turn(self, lo, hi):
+        """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan
+        (the low end grows by 2 mm more than the high end) restarts the progress, mirrored; what was
+        already found stays and is deduplicated as usual."""
+        if self.y_range is not None:
+            grow_lo, grow_hi = self.y_range[0] - lo, hi - self.y_range[1]
+            sign = -1 if grow_lo > grow_hi + 0.002 else 1 if grow_hi > grow_lo + 0.002 else self.sign
+            if sign != self.sign:
+                self.log("scan runs toward %sy" % ("+" if sign > 0 else "-"))
+                self.sign = sign
+                self.done_y = self.frontier = self.shown_y = -np.inf
+                self.start_y = np.inf
+        self.y_range = (lo, hi)
+
+    def raw_y(self, y):
+        """A progress value (done_y, frontier, start_y) as y in the cloud frame."""
+        return self.sign * y
 
     def add_band(self, band):
         """Keep each band once; a band seen again (overlapping in y) keeps the wider of the two views."""
@@ -566,7 +627,7 @@ class FrameCloud:
         line = tracker.done_y - (tracker.reach + p["guard"]) - 0.010
         cloud = self.cloud()
         if len(cloud) and np.isfinite(line):
-            self.chunks = [cloud[cloud[:, 1] >= line]]
+            self.chunks = [cloud[tracker.sign * cloud[:, 1] >= line]]
 
     def clear(self):
         self.chunks = []
