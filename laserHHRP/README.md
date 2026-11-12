@@ -27,11 +27,17 @@ ros2 launch laser_hhrp hhrp.launch.py                          # hardware, softw
 ros2 launch laser_hhrp hhrp.launch.py hardware_trigger:=true   # hardware sync (Nano D3 -> laser In1)
 ros2 launch laser_hhrp hhrp.launch.py simulate:=true           # no hardware at all
 ros2 launch laser_hhrp hhrp.launch.py ui:=false                # without RViz (Pi without a screen)
+ros2 launch laser_hhrp hhrp.launch.py mode:=rivets             # rivet heads instead of holes (hole_detector package)
+ros2 launch laser_hhrp hhrp.launch.py holes:=false             # without hole/rivet detection
 ros2 launch laser_hhrp ui.launch.py                            # RViz with the operator panel alone (e.g. on a PC)
+# which RViz displays start shown: config/rviz_displays.yaml (or ui.launch.py displays_file:=...)
 ```
 
 Launch arguments: `ui` (default `true`: also starts RViz with the operator panel), `simulate`,
-`hardware_trigger`, `nano_port` (default `/dev/ttyUSB0`), `params_file` (default `config/hhrp.yaml`).
+`hardware_trigger`, `nano_port` (default `/dev/ttyUSB0`), `params_file` (default `config/hhrp.yaml`),
+`holes` (default `true`: also starts hole/rivet detection, see `../hole_detector/`), `mode` (`holes` or
+`rivets`; default from `hole_detector/config/params.yaml`), `holes_out_dir` (default
+`~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out`).
 
 Operator actions (the panel buttons call the same services):
 

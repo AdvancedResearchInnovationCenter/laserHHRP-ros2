@@ -4,6 +4,9 @@ Layer 5 (inspection algorithms). **Empty skeleton to be developed.** It declares
 parameters, subscribes to the point cloud and owns the result publisher; `inspect()` does nothing
 yet.
 
+Hole and rivet detection is a separate package, [`hole_detector`](../../hole_detector/README.md), started by
+`hhrp.launch.py` (`holes:=true`). It publishes one `inspection/result` per hole or rivet (`mode`).
+
 Source: `src/inspection_node.cpp`.
 
 ## Interfaces

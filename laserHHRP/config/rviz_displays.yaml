@@ -1,0 +1,34 @@
+# Which RViz displays and marker layers are shown when the operator UI starts (launch/ui.launch.py).
+# true = shown, false = hidden. Edit, then restart the UI. Anything can still be toggled live in the
+# Displays panel. Names must match the display names in config/hhrp.rviz.
+# Another file: ros2 launch laser_hhrp ui.launch.py displays_file:=/path/to/file.yaml
+displays:
+  Live profile: true      # /laser/profile: the current laser line
+  3D scan: true           # /scan/cloud_view: the scan input (lossy on the Pi)
+  Hole surface: true      # /holes/surface: scanned surface coloured by depth below the fit (-1..+1 mm)
+  Scan progress: true     # /holes/progress: decided line, laser line, status text, ruler
+  Holes: true             # /holes/markers: rings, centres, labels, rejected gaps, unscanned bands, distances
+  Fitted circles: false   # /holes/circles: the same rings as points
+  Boundary: true          # /holes/boundary: the raw cut-out saved per hole (width: boundary_margin in
+                          # hole_detector/config/params.yaml)
+  Hole axes: true         # /holes/poses: hole axis (surface normal) at each centre
+  # Rivet mode (mode:=rivets): the same layers under /rivets/*
+  Rivet surface: true     # /rivets/surface: skin coloured by height (-0.3..+0.3 mm)
+  Rivet progress: true    # /rivets/progress
+  Rivets: true            # /rivets/markers: head rings, centres, labels, rejected candidates, bands, distances
+  Rivet circles: false    # /rivets/circles
+  Rivet boundary: true    # /rivets/boundary: raw cut-out saved per rivet
+  Rivet axes: true        # /rivets/poses
+layers:                   # marker namespaces inside Holes / Scan progress and Rivets / Rivet progress
+  top: true               # rim ring (green complete, amber partial)
+  centre: true
+  label: true             # "#id Ø CSK|plain / rms cov"
+  rejected: true          # dashed red ring of a gap that failed a check
+  rejected_reason: true
+  bands: true             # red slabs over scan lines the data dropped
+  distance: true          # line to the nearest earlier hole
+  distance_label: true
+  progress: true          # decided and laser lines
+  status: true            # "scan N · H holes · R rejected · detect X ms"
+  ruler: true
+  ruler_label: true

@@ -9,6 +9,7 @@ axis. The profiles become a 3D point cloud for inspection (e.g. rivet flushness)
 | --- | --- | --- |
 | [`arduino_nano/`](arduino_nano/README.md) | Arduino Nano | Firmware: encoder, IMU, laser trigger, USB link to the Pi |
 | [`laserHHRP/`](laserHHRP/README.md) | Raspberry Pi 5 (ROS 2) | ROS 2 package `laser_hhrp`: drivers, synchronization, calibration, recording, RViz operator panel |
+| [`hole_detector/`](hole_detector/README.md) | Raspberry Pi 5 (ROS 2) | ROS 2 package `hole_detector` (Python): finds holes or rivet heads (`mode:=holes|rivets`) during the scan from `scan/frame`, publishes `inspection/result` and the RViz displays; started by `hhrp.launch.py` (`holes:=false` to leave it out) |
 
 The two parts only share the serial protocol (`arduino_nano/protocol.h` ↔
 `laserHHRP/include/laser_hhrp/serial_protocol.hpp`). Developer docs for every node:

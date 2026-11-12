@@ -1,5 +1,7 @@
 # RViz 2 layout of the operator UI (launch/ui.launch.py): operator panel on the left, 3D view on the right.
-# 3D view: the live laser profile (/laser/profile) and the 3D scan (/scan/cloud_view, from point_cloud_node).
+# 3D view: the live laser profile (/laser/profile) and the 3D scan (/scan/cloud_view, from point_cloud_node),
+# plus the hole and rivet detection displays (hole_detector; only the running mode publishes).
+# Which start shown: config/rviz_displays.yaml.
 Panels:
   - Class: laser_hhrp/OperatorPanel
     Name: Operator
@@ -47,6 +49,179 @@ Visualization Manager:
       Color Transformer: AxisColor
       Axis: Z
       Decay Time: 0
+      Value: true
+    # ---- hole detection (hole_detector package); on/off at start: config/rviz_displays.yaml ----
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Hole surface
+      Enabled: true
+      Topic:
+        Value: /holes/surface
+        Depth: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: deviation_mm
+      Use rainbow: true
+      Invert Rainbow: false
+      Autocompute Intensity Bounds: false
+      Min Intensity: -1
+      Max Intensity: 1
+      Decay Time: 600
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Scan progress
+      Enabled: true
+      Topic:
+        Value: /holes/progress
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Holes
+      Enabled: true
+      Topic:
+        Value: /holes/markers
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Fitted circles
+      Enabled: false
+      Topic:
+        Value: /holes/circles
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: Intensity
+      Channel Name: hole_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Value: false
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Boundary
+      Enabled: true
+      Topic:
+        Value: /holes/boundary
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: hole_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Decay Time: 100000
+      Value: true
+    - Class: rviz_default_plugins/PoseArray
+      Name: Hole axes
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.008
+      Axes Radius: 0.0006
+      Topic:
+        Value: /holes/poses
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Rivet surface
+      Enabled: true
+      Topic:
+        Value: /rivets/surface
+        Depth: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: deviation_mm
+      Use rainbow: true
+      Invert Rainbow: false
+      Autocompute Intensity Bounds: false
+      Min Intensity: -0.3
+      Max Intensity: 0.3
+      Decay Time: 600
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Rivet progress
+      Enabled: true
+      Topic:
+        Value: /rivets/progress
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Rivets
+      Enabled: true
+      Topic:
+        Value: /rivets/markers
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Value: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Rivet circles
+      Enabled: false
+      Topic:
+        Value: /rivets/circles
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: Intensity
+      Channel Name: rivet_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Value: false
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Rivet boundary
+      Enabled: true
+      Topic:
+        Value: /rivets/boundary
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: rivet_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Decay Time: 100000
+      Value: true
+    - Class: rviz_default_plugins/PoseArray
+      Name: Rivet axes
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.008
+      Axes Radius: 0.0006
+      Topic:
+        Value: /rivets/poses
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
       Value: true
   Global Options:
     Fixed Frame: laser
