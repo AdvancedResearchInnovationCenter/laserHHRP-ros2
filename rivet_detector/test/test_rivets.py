@@ -191,6 +191,33 @@ def test_panel2_bags():
         assert not any(np.linalg.norm(g.centre[:2] - r.centre[:2]) < 2 * r.radius for g in rejected for r in rivets)
 
 
+# Rivets allowed past 0.5 s per bag (all <= 0.8 s): heads whose candidate or edge coverage sits right at a limit
+# (MIN_ON_PART: the head + ring disc reaches the cones of the holes beside it; min_rim_coverage) pass a cycle or
+# two later, and the first head of a scan waits for a crop long enough to fit the skin.
+LATE = {"panel2_06112026_1": 1, "panel2_09112026_02": 1, "b_1904": 2}
+
+
+def test_latency(period=0.2):
+    """Simulated real time at the node's cycle: every rivet comes out once, < 0.5 s after the frame that
+    completes it (far edge + ring + guard), with detect <= 150 ms median and <= 350 ms worst per cycle."""
+    from frames import replay
+    expected = {BAGS / name: count for name, (count, _) in PANEL2.items()}
+    expected.update({PANEL / name: count for name, count in PANEL_RIVETS.items()})
+    for bag, count in expected.items():
+        if not bag.exists():
+            print("skip %s: not copied here" % bag.name)
+            continue
+        run = replay(bag, Tracker(log=lambda *_: None), period=period)
+        median, worst = np.median(run.cycle), max(run.cycle)
+        print("%s latency: %d rivets, max %.2f s, cycle median %.0f ms worst %.0f ms" % (
+            bag.name, len(run.features), max(run.latency, default=0), median * 1000, worst * 1000))
+        assert len(run.features) == count, "%s: %d rivets, expected %d" % (bag.name, len(run.features), count)
+        slow = sum(lat >= 0.5 for lat in run.latency)
+        assert slow <= LATE.get(bag.name, 0), "%s: %d rivets later than 0.5 s" % (bag.name, slow)
+        # Worst 350 ms: at the scan's end the laser stands still, profiles pile up at one y and the crop grows.
+        assert median <= 0.150 and worst <= 0.350, bag.name
+
+
 def test_launch_single_node():
     """The package's launch file starts its own node only (holes / rivets / both: laser_hhrp detectors.launch.py)."""
     assert launch_nodes(ROOT / "launch" / "rivet_detector.launch.py") == [("rivet_detector", "rivet_detector")]
@@ -240,4 +267,5 @@ if __name__ == "__main__":
     test_results_have_no_nan(found)
     test_panel2_bags()
     test_panel_bags_generic()
+    test_latency()
     print("all checks passed")

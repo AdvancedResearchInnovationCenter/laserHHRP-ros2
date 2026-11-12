@@ -39,6 +39,7 @@ RIM_SECTORS = 24
 MIN_SKIN_BAND = 0.00003       # the skin fit keeps points within max(4 x MAD, this) of the quadratic
 GAP_MARGIN = 0.0015           # skin this close to a gap (hole cone, part side) is left out of measurements
 EDGE_BIN = 0.0001             # radial bin of the edge profiles (raw points)
+MIN_DISMISS_CROP = 0.030      # a short crop (scan start) fits the skin poorly: its flat candidates are retried
 HEAD_CLEAR = 0.0005           # a gap (hole, part side) this close outside the head edge cuts the head
 MIN_ON_PART = 0.9            # share of the head + skin ring that must hold skin points (holes, part sides fail)
 UNSCANNED_SHARE = 0.2         # a scan line with fewer points than this x the median is unscanned
@@ -343,6 +344,8 @@ def measure_head(skin_uv, skin_h, image, centre, radius, p):
         return 0.0, np.empty((0, 2))
     level = np.median(skin)
     size = float(np.median(head) - level)
+    if size < p["min_height"] / 2:
+        return size, np.empty((0, 2))                       # flat (or the wrong way): no head edges to look for
     h = h - level
     sector = np.floor((np.arctan2(d[:, 1], d[:, 0]) + np.pi) / (2 * np.pi) * RIM_SECTORS).astype(int) % RIM_SECTORS
     r0 = 0.5 * radius
@@ -357,12 +360,14 @@ def measure_head(skin_uv, skin_h, image, centre, radius, p):
     total = total + np.roll(total, 1, axis=0) + np.roll(total, -1, axis=0)
     count = count + np.roll(count, 1, axis=0) + np.roll(count, -1, axis=0)
     profiles = np.where(count >= 3, total / np.maximum(count, 1), np.nan)
-    ring = (r > radius + 0.5 * p["diam_tol"]) & (r < radius + p["ring"])
+    ring = np.flatnonzero((r > radius + 0.5 * p["diam_tol"]) & (r < radius + p["ring"]))
+    ring = ring[np.argsort(sector[ring], kind="stable")]
+    ring_by_sector = np.split(h[ring], np.searchsorted(sector[ring], np.arange(1, RIM_SECTORS)))
     edges = []
     for k in range(RIM_SECTORS):
         # Each sector against its own stretch of the skin ring: a residual skin tilt of a few hundredths
         # of a mm would otherwise keep the high side above half height.
-        own = h[(sector == k) & ring]
+        own = ring_by_sector[k]
         profile = profiles[k] - (np.median(own) if len(own) >= 10 else 0.0)
         # The outermost bin still above half height: texture and the pit inside the head can dip lower.
         above = np.flatnonzero(np.nan_to_num(profile, nan=-np.inf) >= size / 2)
@@ -376,15 +381,19 @@ def measure_head(skin_uv, skin_h, image, centre, radius, p):
     return size, np.array(edges).reshape(-1, 2)
 
 
-def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
+def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False, down=None, known=()):
     """Find every rivet head whose edge plus ring lies inside [lo + guard, hi - guard] along y.
 
     Same contract as the hole detector's `detect`: returns (rivets, rejected, view), or None when the
     crop has no usable skin. Heads cut by the crop ends are in neither list (retried next crop).
+    `down`: the crop already downsampled (the Tracker caches it). `known`: centres of rivets already reported
+    and of candidates already found to be no head; a candidate on one is skipped, not measured again. The
+    candidates found to be no head while wholly inside the crop are returned in view["dismissed"].
     """
     if len(points) < 3:
         return None
-    down = voxel_down(points, p["voxel"])
+    if down is None:
+        down = voxel_down(points, p["voxel"])
     found = find_top_surface(down, p)
     if found is None:
         log("no skin surface in this crop")
@@ -392,16 +401,33 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
     lo_limit = lo if lo_is_scan_start else lo + p["guard"]
     surface, uv, depth = found
     rel, occupied, pixels, image = height_image(uv, depth, p)
-    full_uv, full_depth = surface_depth(points, surface)
-    on_skin = np.abs(full_depth) < p["surface_tol"]
-    skin_uv, skin_h = full_uv[on_skin], -full_depth[on_skin]
-    order = np.argsort(skin_uv[:, 1], kind="stable")          # sorted along the scan for measure_head
-    skin_uv, skin_h = skin_uv[order], skin_h[order]
+    ys = points[:, 1]
     rivets, rejected = [], []
     lo_d, hi_d = p["rivet_diam"] - p["diam_tol"], p["rivet_diam"] + p["diam_tol"]
+    # Full-resolution points only around each candidate: the head search reaches rivet_diam / 2 + diam_tol + ring;
+    # 1 mm more for the centre settling and the surface tilt. The cut-out is taken for accepted heads only.
+    head_reach = p["rivet_diam"] / 2 + p["diam_tol"] + p["ring"]
+    box = head_reach + 0.001
+    dismissed = []
     for ij, sign in find_candidates(rel, occupied, image, p):
-        # A sunk head is measured on the skin turned upside down, so it is again proud.
         centre_2d, radius, fitted = pixel_uv(ij, image), p["rivet_diam"] / 2, None
+        start = to_3d(centre_2d, 0.0, surface)
+        if any(np.linalg.norm(start - c) < p["rivet_diam"] / 4 for c in known):
+            continue                                   # reported already
+        # A nominal head + ring around this start must be in the crop: a head the laser is still crossing would
+        # be measured, and fail, on every cycle until it is. A bigger head, or a first guess of the centre that
+        # is off, fails the reach check below and is tried again next cycle.
+        need = p["rivet_diam"] / 2 + p["ring"]
+        if start[1] - need < lo_limit or start[1] + need > hi - p["guard"]:
+            continue
+        near_points = points[np.abs(ys - start[1]) < box]
+        near_points = near_points[np.abs(near_points[:, 0] - start[0]) < box]
+        full_uv, full_depth = surface_depth(near_points, surface)
+        on_skin = np.abs(full_depth) < p["surface_tol"]
+        skin_uv, skin_h = full_uv[on_skin], -full_depth[on_skin]
+        order = np.argsort(skin_uv[:, 1], kind="stable")      # sorted along the scan for measure_head
+        skin_uv, skin_h = skin_uv[order], skin_h[order]
+        # A sunk head is measured on the skin turned upside down, so it is again proud.
         for _ in range(2):                                      # centre and radius settle in two passes
             height, edges = measure_head(skin_uv, sign * skin_h, image, centre_2d, radius, p)
             fitted = fit_rim(edges) if len(edges) >= 6 else None
@@ -409,6 +435,8 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
                 break
             centre_2d, radius = fitted[0], fitted[1]
         if fitted is None or height < p["min_height"]:
+            if lo_limit < start[1] - head_reach and start[1] + head_reach < hi - p["guard"] and hi - lo >= MIN_DISMISS_CROP:
+                dismissed.append(start)                # wholly seen on a settled skin fit: no need to look again
             continue                                   # not a head: weak candidates are noise, not rejections
         centre_2d, radius, rms, rim_xy = fitted
         centre = to_3d(centre_2d, -sign * height, surface)
@@ -442,14 +470,20 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         if coverage < p["min_rim_coverage"] or scanned_share < p["min_scanned_share"] or not both_ends:
             reject("edge %.0f%% of %.0f%% scanned" % (coverage * 100, scanned_share * 100))
             continue
-        r = np.linalg.norm(full_uv - centre_2d, axis=1)
         # Raw, untouched points in the cylinder edge + margin; only the floor seen through a nearby hole is cut.
         # shortcut: as for holes, a margin wider than ring + guard can be clipped at the crop ends.
-        boundary = (r <= radius + p["boundary_margin"]) & (np.abs(full_depth) < p["max_depth"])
+        cut = radius + p["boundary_margin"] + 0.002
+        near_points = points[np.abs(ys - centre[1]) < cut]
+        near_points = near_points[np.abs(near_points[:, 0] - centre[0]) < cut]
+        cut_uv, cut_depth = surface_depth(near_points, surface)
+        r = np.linalg.norm(cut_uv - centre_2d, axis=1)
+        boundary = (r <= radius + p["boundary_margin"]) & (np.abs(cut_depth) < p["max_depth"])
         rivets.append(Rivet(centre, centre_2d, radius, sign * height, rms, coverage, scanned_share,
-                            bool(scanned_share < 1 or gap_dist < reach), local_normal(centre_2d, surface), surface, points[boundary]))
+                            bool(scanned_share < 1 or gap_dist < reach), local_normal(centre_2d, surface), surface,
+                            near_points[boundary]))
     skin = np.abs(depth) < p["surface_tol"]
-    return rivets, rejected, {"points": down, "depth": depth, "bands": band_corners(image, uv[skin], surface)}
+    return rivets, rejected, {"points": down, "depth": depth, "bands": band_corners(image, uv[skin], surface),
+                              "dismissed": dismissed}
 
 
 def mirror(points):
@@ -503,6 +537,9 @@ class Tracker:
         self.bands = []
         self.shown_y = -np.inf
         self.rejections = 0
+        self.voxels = np.empty((0, 3))  # downsampled voxel rows already complete (worked-on frame)
+        self.dismissed = []        # centres of candidates found to be no head (worked-on frame)
+        self.voxel_row = -np.inf   # rows below this index are in `voxels`
 
     def feed(self, points, stamp):
         """Process one cumulative cloud. Returns (was_reset, new_rivets)."""
@@ -534,11 +571,13 @@ class Tracker:
         overlap = self.reach + p["guard"]
         crop_lo = self.done_y - overlap
         crop = points[y > crop_lo]
-        found = detect(crop, p, crop[:, 1].min(), frontier, self.log,
-                       lo_is_scan_start=crop_lo < self.start_y) if len(crop) > 1000 else None
+        found = detect(crop, p, crop[:, 1].min(), frontier, self.log, lo_is_scan_start=crop_lo < self.start_y,
+                       down=self.downsample(crop, frontier),
+                       known=[r.centre * [s, s, 1] for r in self.rivets] + self.dismissed) if len(crop) > 1000 else None
         if found is None:
             return was_reset, []
         rivets, rejected, self.view = found
+        self.dismissed = [c for c in self.dismissed if c[1] > crop_lo] + self.view["dismissed"]   # worked-on frame
         if s < 0:
             rivets, rejected, self.view = mirror_back(rivets), mirror_back(rejected), mirror_view(self.view)
         down, depth = self.view["points"], self.view["depth"]
@@ -567,6 +606,26 @@ class Tracker:
                 self.rejected.append(gap)
         return was_reset, new
 
+    def downsample(self, crop, frontier):
+        """voxel_down of the crop, reusing voxel rows (along y) that are complete: profiles arrive in scan
+        order, so a row behind the frontier gets no more points. Only the newest rows, and the crop's first row
+        (cut by the crop), are averaged again. Same points in the same order as voxel_down(crop): the surface
+        fit samples by index, so a different order would move the fit."""
+        voxel = self.p["voxel"]
+        row = np.floor(crop[:, 1] / voxel)
+        first = row.min()
+        cached = np.floor(self.voxels[:, 1] / voxel)
+        self.voxels = self.voxels[cached > first]                    # the crop's first row is redone below
+        redo = (row >= self.voxel_row) | (row == first)
+        fresh = voxel_down(crop[redo], voxel)
+        done = np.floor(frontier / voxel)                            # rows below this are complete
+        fresh_row = np.floor(fresh[:, 1] / voxel)
+        self.voxels = np.vstack((self.voxels, fresh[(fresh_row < done) & (fresh_row > first)]))
+        self.voxel_row = max(self.voxel_row, done)
+        down = np.vstack((self.voxels, fresh[(fresh_row >= done) | (fresh_row == first)]))
+        # voxel_down's order: by voxel index x, then y, then z
+        return down[np.lexsort(np.floor(down / voxel).T[::-1])]
+
     def turn(self, lo, hi):
         """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan
         (the low end grows by 2 mm more than the high end) restarts the progress, mirrored; what was
@@ -579,6 +638,8 @@ class Tracker:
                 self.sign = sign
                 self.done_y = self.frontier = self.shown_y = -np.inf
                 self.start_y = np.inf
+                self.voxels, self.voxel_row = np.empty((0, 3)), -np.inf
+                self.dismissed = []
         self.y_range = (lo, hi)
 
     def raw_y(self, y):

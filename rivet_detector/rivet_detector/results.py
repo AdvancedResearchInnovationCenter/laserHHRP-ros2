@@ -2,6 +2,8 @@
 A copy of the hole results module, kept separate so the hole detector can change without moving this."""
 
 import csv
+import queue
+import threading
 import json
 import time
 
@@ -12,10 +14,30 @@ CSV_COLUMNS = ["id", "cx_mm", "cy_mm", "cz_mm", "head_diam_mm", "head_height_mm"
 
 
 class ScanFolder:
-    """<out_root>/rivet_scan_<time>/: summary.csv plus rivet_NN.pcd. Made at the scan's first rivet."""
+    """<out_root>/rivet_scan_<time>/: summary.csv plus rivet_NN.pcd. Made at the scan's first rivet.
+
+    Rows and PCDs are written by a worker thread in save order, so detection never waits for the disk;
+    close() waits until everything queued is written."""
 
     def __init__(self, out_root, log):
         self.root, self.log, self.path = out_root, log, None
+        self.jobs = queue.Queue(maxsize=64)        # full: save() waits (the disk is far behind)
+        threading.Thread(target=self.work, daemon=True).start()
+
+    def work(self):
+        while True:
+            path, row, name, points = self.jobs.get()
+            try:
+                with (path / "summary.csv").open("a", newline="") as handle:
+                    csv.writer(handle).writerow(row)
+                write_pcd(path / name, points)
+            except OSError as error:
+                self.log("could not save %s: %s" % (name, error))
+            finally:
+                self.jobs.task_done()
+
+    def close(self):
+        self.jobs.join()
 
     def new_scan(self):
         self.path = None
@@ -36,13 +58,11 @@ class ScanFolder:
             with (self.path / "summary.csv").open("w", newline="") as handle:
                 csv.writer(handle).writerow(CSV_COLUMNS)
             self.log("saving results to %s" % self.path)
-        with (self.path / "summary.csv").open("a", newline="") as handle:
-            csv.writer(handle).writerow([
-                rivet.id, *("%.3f" % v for v in rivet.centre * 1000), "%.3f" % (2000 * rivet.radius),
-                "%.3f" % (rivet.height * 1000), "%.3f" % (rivet.rms * 1000), "%.2f" % rivet.coverage, rivet.partial,
-                "%.2f" % rivet.scanned_share,
-                "" if nearest is None else "%.3f" % (np.linalg.norm(rivet.centre - nearest.centre) * 1000)])
-        write_pcd(self.path / ("rivet_%02d.pcd" % rivet.id), rivet.boundary)
+        row = [rivet.id, *("%.3f" % v for v in rivet.centre * 1000), "%.3f" % (2000 * rivet.radius),
+               "%.3f" % (rivet.height * 1000), "%.3f" % (rivet.rms * 1000), "%.2f" % rivet.coverage, rivet.partial,
+               "%.2f" % rivet.scanned_share,
+               "" if nearest is None else "%.3f" % (np.linalg.norm(rivet.centre - nearest.centre) * 1000)]
+        self.jobs.put((self.path, row, "rivet_%02d.pcd" % rivet.id, np.array(rivet.boundary)))
 
 
 def write_pcd(path, points):

@@ -39,6 +39,7 @@ class RivetDetector(Node):
         self.declare_parameter("out_dir", "~/hole_detector_out")
         # The decided surface, coloured by depth below the fit: turn off on the Pi to save CPU and network.
         self.declare_parameter("viz_surface", True)
+        self.declare_parameter("period", 0.2)    # s between detection cycles (frame input)
         self.viz_surface = self.get_parameter("viz_surface").value
         self.folder = results.ScanFolder(Path(self.get_parameter("out_dir").value).expanduser(),
                                          self.get_logger().info)
@@ -73,7 +74,8 @@ class RivetDetector(Node):
             self.create_subscription(ScanFrame, topic, self.on_frame, QoSProfile(
                 depth=200, reliability=ReliabilityPolicy.RELIABLE),
                 callback_group=MutuallyExclusiveCallbackGroup())
-            self.create_timer(1.0, self.on_timer, callback_group=MutuallyExclusiveCallbackGroup())
+            self.create_timer(self.get_parameter("period").value, self.on_timer,
+                              callback_group=MutuallyExclusiveCallbackGroup())
         else:
             # Depth 1: when processing falls behind, the newest cumulative cloud wins. Reliable (as the
             # scanner publishes): best effort drops most 10+ MB clouds (10 of 64 arrived in the bag test).
@@ -190,11 +192,14 @@ class RivetDetector(Node):
 def main():
     rclpy.init()
     executor = MultiThreadedExecutor(num_threads=2)
-    executor.add_node(RivetDetector())
+    node = RivetDetector()
+    executor.add_node(node)
     try:
         executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass                                   # Ctrl+C / launch shutdown: a clean exit, not a crash
+    finally:
+        node.folder.close()                    # every rivet found is on disk before the process ends
 
 
 if __name__ == "__main__":
