@@ -178,6 +178,14 @@ class ScanControllerNode : public rclcpp::Node {
   }
 
   // ---- monitoring (10 Hz) ----
+  /// "1.83 s ago", or "never" before the first message.
+  std::string age(const rclcpp::Time& t) {
+    if (t.nanoseconds() == 0) return "never";
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.2f s ago", (now() - t).seconds());
+    return text;
+  }
+
   // Snapshot of every input -> monitor_rules.hpp -> active faults; a FATAL fault stops the scan.
   void monitor() {
     MonitorInput in;
@@ -216,7 +224,10 @@ class ScanControllerNode : public rclcpp::Node {
       if (f.severity == Severity::FATAL && active()) {
         std::string ignored;
         stop_scan(ignored, Status::ERROR);
-        RCLCPP_ERROR(get_logger(), "scan stopped by a critical fault: %s", f.message.c_str());
+        // The input ages show which side was late (limits: Nano 1.5 s, laser 3 s).
+        RCLCPP_ERROR(get_logger(), "scan stopped by a critical fault: %s (last nano/status %s, "
+                     "last laser/status %s)", f.message.c_str(), age(nano_time_).c_str(),
+                     age(laser_time_).c_str());
         break;
       }
     }

@@ -13,6 +13,7 @@
 
     # ---- Nano ----
     nano.baud: 1000000               # = SERIAL_BAUD in arduino_nano.ino
+    nano.rt_priority: 45             # SCHED_FIFO of the serial reader thread (below the USB IRQ thread, 50); 0 = off
     imu.period_ms: 0                 # IMU period on the Nano; 0 = firmware default (240 Hz)
 
     # ---- encoder / roller ----

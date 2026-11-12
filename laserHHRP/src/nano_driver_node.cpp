@@ -10,11 +10,25 @@
 // Subscribes
 //   nano/command   laser_hhrp/NanoCommand     start / stop triggering, zero (scan controller)
 // The port is reopened every 2 s if the Nano is unplugged.
+//
+// Threads: a reader thread (SCHED_FIFO nano.rt_priority, when allowed) only moves bytes from the
+// port into a queue, so the 4 KB tty buffer never fills (it did when the 1 ms ROS timer ran late
+// under load: the FTDI then overran and packets were lost -> false "Nano link lost"). The ROS
+// timer parses the queue and publishes, as before.
 #include <fcntl.h>
 #include <linux/serial.h>
+#include <poll.h>
+#include <pthread.h>
+#include <sched.h>
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
+
+#include <atomic>
+#include <cstring>
+#include <deque>
+#include <mutex>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/imu.hpp>
@@ -73,61 +87,182 @@ class NanoDriverNode : public rclcpp::Node {
         "nano/command", 10, [this](const msg::NanoCommand& c) { send_command(c); });
 
     timer_ = create_wall_timer(std::chrono::milliseconds(1), [this] { poll(); });
+
+    reader_thread_ = std::thread([this] { read_loop(); });
+    const int priority = static_cast<int>(declare_parameter("nano.rt_priority", 45));
+    if (priority > 0) {
+      sched_param sp{};
+      sp.sched_priority = priority;
+      const int err = pthread_setschedparam(reader_thread_.native_handle(), SCHED_FIFO, &sp);
+      if (err)
+        RCLCPP_WARN(get_logger(), "serial reader at normal priority (SCHED_FIFO %d refused: %s; "
+                    "allow it with rtprio in /etc/security/limits.d, then log in again)",
+                    priority, std::strerror(err));
+      else
+        RCLCPP_INFO(get_logger(), "serial reader at SCHED_FIFO %d", priority);
+    }
   }
 
   ~NanoDriverNode() override {
     msg::NanoCommand stop;
     stop.command = msg::NanoCommand::STOP;
     send_command(stop);
-    if (fd_ >= 0) ::close(fd_);
+    stop_ = true;
+    reader_thread_.join();  // the reader closes the port on its way out
   }
 
  private:
+  struct Chunk {
+    int64_t arrival_ns;
+    std::vector<uint8_t> bytes;
+  };
+  static constexpr size_t kMaxQueuedBytes = 1 << 20;  // ~90 s of Nano data
+
   static int64_t now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
   }
 
-  // ---- main loop (every 1 ms) ----
-  // 1. (re)open the port if needed, 2. read all waiting bytes and handle complete packets,
-  // 3. send a clock request when due, 4. warn if the Nano has been silent for 0.5 s.
+  // ---- reader thread: port -> queue, nothing else (no ROS calls, no logging) ----
+  void read_loop() {
+    uint8_t buf[4096];
+    int64_t last_open_ns = -10000000000LL;
+    while (!stop_) {
+      int fd;
+      {
+        std::lock_guard<std::mutex> lock(fd_mutex_);
+        fd = fd_;
+      }
+      if (fd < 0) {  // (re)open every 2 s
+        const int64_t now = now_ns();
+        if (now - last_open_ns < 2000000000LL) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          continue;
+        }
+        last_open_ns = now;
+        const int opened = open_serial(port_name_, static_cast<int>(baud_));
+        if (opened < 0) {
+          ++open_failures_;
+          continue;
+        }
+        std::lock_guard<std::mutex> lock(fd_mutex_);
+        fd_ = opened;
+        ++opens_;
+        continue;
+      }
+      pollfd pfd{fd, POLLIN, 0};
+      if (::poll(&pfd, 1, 5) <= 0) continue;  // timeout (checks stop_) or EINTR
+      ssize_t n;
+      while ((n = ::read(fd, buf, sizeof(buf))) > 0) enqueue(buf, static_cast<size_t>(n));
+      if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+        std::lock_guard<std::mutex> lock(fd_mutex_);  // unplugged
+        ::close(fd_);
+        fd_ = -1;
+        ++closes_;
+      }
+    }
+    std::lock_guard<std::mutex> lock(fd_mutex_);
+    if (fd_ >= 0) ::close(fd_);
+    fd_ = -1;
+  }
+
+  void enqueue(const uint8_t* data, size_t n) {
+    const int64_t arrival = now_ns();
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (queued_bytes_ + n > kMaxQueuedBytes) {  // the ROS side stopped: drop rather than grow
+      dropped_bytes_ += n;
+      return;
+    }
+    // shortcut: allocates per chunk in the RT thread; a preallocated ring if latency ever shows it.
+    queue_.push_back({arrival, std::vector<uint8_t>(data, data + n)});
+    queued_bytes_ += n;
+  }
+
+  // ---- main loop (ROS timer, every 1 ms) ----
+  // 1. log port changes, 2. handle the queued bytes, 3. send a clock request when due,
+  // 4. warn if the Nano has been silent for 0.5 s, 5. every 5 s, report lost data.
   void poll() {
     const int64_t now = now_ns();
-    // (Re)open the port.
-    if (fd_ < 0) {
-      if (now - last_open_ns_ < 2000000000LL) return;
-      last_open_ns_ = now;
-      fd_ = open_serial(port_name_, static_cast<int>(baud_));
-      if (fd_ < 0) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "%s: serial port did not open",
-                             port_name_.c_str());
-        return;
-      }
+    const uint32_t opens = opens_, closes = closes_, failures = open_failures_;
+    if (closes != seen_closes_) {
+      seen_closes_ = closes;
+      RCLCPP_ERROR(get_logger(), "%s: Nano disconnected", port_name_.c_str());
+      port_open_ = false;
+    }
+    if (opens != seen_opens_) {
+      seen_opens_ = opens;
       RCLCPP_INFO(get_logger(), "%s opened, waiting for the Nano", port_name_.c_str());
       clock_.reset();
       last_heard_ns_ = now;
+      port_open_ = true;
     }
-    // Read everything waiting (non-blocking). PacketReader finds 0xAA 0x55, checks the length and
-    // the checksum; push() returns true when one packet is complete.
-    uint8_t buf[512];
-    ssize_t n;
-    while ((n = ::read(fd_, buf, sizeof(buf))) > 0)
-      for (ssize_t i = 0; i < n; ++i)
-        if (reader_.push(buf[i])) handle_packet();
-    if (n == 0 || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {  // unplugged
-      RCLCPP_ERROR(get_logger(), "%s: Nano disconnected", port_name_.c_str());
-      ::close(fd_);
-      fd_ = -1;
-      return;
+    if (failures != seen_failures_) {
+      seen_failures_ = failures;
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "%s: serial port did not open",
+                           port_name_.c_str());
     }
+    // PacketReader finds 0xAA 0x55, checks the length and the checksum; push() returns true when
+    // one packet is complete.
+    std::deque<Chunk> chunks;
+    {
+      std::lock_guard<std::mutex> lock(queue_mutex_);
+      chunks.swap(queue_);
+      queued_bytes_ = 0;
+    }
+    for (const Chunk& c : chunks) {
+      arrival_ns_ = c.arrival_ns;
+      for (uint8_t b : c.bytes)
+        if (reader_.push(b)) handle_packet();
+    }
+    if (!port_open_) return;
     sync_clock(now);
     if (now - last_heard_ns_ > 500000000LL)
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Nano silent");
+    report_losses(now);
   }
 
+  /// Every 5 s, if anything was lost: bad packets (checksum/length), bytes dropped by the queue,
+  /// and FTDI overruns (the chip's buffer overflowed: bytes lost before they reached the Pi).
+  void report_losses(int64_t now) {
+    if (now - last_loss_report_ns_ < 5000000000LL) return;
+    last_loss_report_ns_ = now;
+    int overruns = -1;
+    {
+      std::lock_guard<std::mutex> lock(fd_mutex_);
+      serial_icounter_struct ic{};
+      if (fd_ >= 0 && ioctl(fd_, TIOCGICOUNT, &ic) == 0) overruns = ic.overrun;
+    }
+    const uint32_t bad = reader_.errors();
+    const uint64_t dropped = dropped_bytes_;
+    const bool overran = last_overruns_ >= 0 && overruns > last_overruns_;  // first read = baseline
+    if (bad != last_bad_ || dropped != last_dropped_ || overran)
+      RCLCPP_WARN(get_logger(), "serial data lost in the last 5 s: %u bad packets, %d FTDI overruns, "
+                  "%lu bytes dropped", bad - last_bad_, overran ? overruns - last_overruns_ : 0,
+                  static_cast<unsigned long>(dropped - last_dropped_));
+    last_bad_ = bad;
+    last_dropped_ = dropped;
+    if (overruns >= 0) last_overruns_ = overruns;
+  }
+
+  /// Writes one whole packet (commands and clock requests, from the ROS thread).
   void write_packet(const std::vector<uint8_t>& bytes) {
-    if (fd_ >= 0 && ::write(fd_, bytes.data(), bytes.size()) != static_cast<ssize_t>(bytes.size()))
-      RCLCPP_WARN(get_logger(), "write to the Nano failed");
+    std::lock_guard<std::mutex> lock(fd_mutex_);
+    if (fd_ < 0) return;
+    size_t done = 0;
+    int retries = 0;
+    while (done < bytes.size()) {
+      const ssize_t w = ::write(fd_, bytes.data() + done, bytes.size() - done);
+      if (w > 0) {
+        done += static_cast<size_t>(w);
+      } else if (w < 0 && errno == EINTR) {
+        continue;
+      } else if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && ++retries < 20) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+      } else {
+        RCLCPP_WARN(get_logger(), "write to the Nano failed");
+        return;
+      }
+    }
   }
 
   // ---- Pi -> Nano ----
@@ -149,14 +284,14 @@ class NanoDriverNode : public rclcpp::Node {
 
   /// Pi time of a Nano time (arrival time until the first clock exchange).
   rclcpp::Time pi_time(int64_t device_ns) const {
-    return rclcpp::Time(clock_.valid() ? clock_.to_host(device_ns) : now_ns());
+    return rclcpp::Time(clock_.valid() ? clock_.to_host(device_ns) : arrival_ns_);
   }
 
   // ---- Nano -> Pi: one complete packet ----
   // Every packet carries the Nano time in us. We keep it (device_time_ns, used for pairing and
   // IMU interpolation) and add the Pi time (header.stamp) through the clock mapping.
   void handle_packet() {
-    last_heard_ns_ = now_ns();
+    last_heard_ns_ = arrival_ns_;
     switch (reader_.type()) {
       case p::PKT_ENCODER: {
         p::EncoderPacket e;
@@ -228,7 +363,7 @@ class NanoDriverNode : public rclcpp::Node {
         if (!reader_.payload(r)) return;
         const int64_t receive_ns = static_cast<int64_t>(r.receive_us) * 1000;
         const int64_t send_ns = static_cast<int64_t>(r.send_us) * 1000;
-        if (!clock_.reply(r.sequence, r.host_send_ns, receive_ns, send_ns, now_ns()) ||
+        if (!clock_.reply(r.sequence, r.host_send_ns, receive_ns, send_ns, arrival_ns_) ||
             !clock_.valid())
           return;
         msg::ClockMap c;
@@ -246,10 +381,24 @@ class NanoDriverNode : public rclcpp::Node {
 
   std::string port_name_;
   int64_t baud_ = 1000000;
+  std::mutex fd_mutex_;  // fd_: opened/closed by the reader, written by the ROS thread
   int fd_ = -1;
   p::PacketReader reader_;
   ClockSync clock_;
-  int64_t last_open_ns_ = -10000000000LL, last_heard_ns_ = 0, last_sync_ns_ = 0;
+  int64_t last_heard_ns_ = 0, last_sync_ns_ = 0, last_loss_report_ns_ = 0;
+  int64_t arrival_ns_ = 0;  // Pi arrival time of the bytes being parsed
+  std::thread reader_thread_;
+  std::atomic<bool> stop_{false};
+  std::atomic<uint32_t> opens_{0}, closes_{0}, open_failures_{0};
+  uint32_t seen_opens_ = 0, seen_closes_ = 0, seen_failures_ = 0;
+  bool port_open_ = false;
+  std::mutex queue_mutex_;
+  std::deque<Chunk> queue_;
+  size_t queued_bytes_ = 0;
+  std::atomic<uint64_t> dropped_bytes_{0};
+  uint32_t last_bad_ = 0;
+  uint64_t last_dropped_ = 0;
+  int last_overruns_ = -1;
   uint32_t sync_sequence_ = 0;
   rclcpp::Publisher<msg::EncoderSample>::SharedPtr encoder_pub_;
   rclcpp::Publisher<msg::TriggerRecord>::SharedPtr trigger_pub_;

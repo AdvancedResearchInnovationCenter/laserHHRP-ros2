@@ -128,8 +128,11 @@ class ScanSwitch(Node):
     def call(self, name: str) -> None:
         def done(future) -> None:
             result = future.result()
-            log = self.get_logger().info if result.success else self.get_logger().warning
-            log(f"{name}: {result.message}")
+            # Two call sites: rclpy refuses one call site logging at two severities (ValueError).
+            if result.success:
+                self.get_logger().info(f"{name}: {result.message}")
+            else:
+                self.get_logger().warning(f"{name}: {result.message}")
 
         self.triggers[name].call_async(Trigger.Request()).add_done_callback(done)
 
