@@ -113,6 +113,7 @@ class NanoDriverNode : public rclcpp::Node {
 
  private:
   struct Chunk {
+    uint32_t port_open;  // which opening of the port it came from (opens_ at read time)
     int64_t arrival_ns;
     std::vector<uint8_t> bytes;
   };
@@ -174,7 +175,7 @@ class NanoDriverNode : public rclcpp::Node {
       return;
     }
     // shortcut: allocates per chunk in the RT thread; a preallocated ring if latency ever shows it.
-    queue_.push_back({arrival, std::vector<uint8_t>(data, data + n)});
+    queue_.push_back({opens_, arrival, std::vector<uint8_t>(data, data + n)});
     queued_bytes_ += n;
   }
 
@@ -193,6 +194,8 @@ class NanoDriverNode : public rclcpp::Node {
       seen_opens_ = opens;
       RCLCPP_INFO(get_logger(), "%s opened, waiting for the Nano", port_name_.c_str());
       clock_.reset();
+      reader_ = p::PacketReader();  // a packet cut by the reopen must not join the new bytes
+      last_bad_ = 0;
       last_heard_ns_ = now;
       port_open_ = true;
     }
@@ -210,6 +213,7 @@ class NanoDriverNode : public rclcpp::Node {
       queued_bytes_ = 0;
     }
     for (const Chunk& c : chunks) {
+      if (c.port_open != seen_opens_) continue;  // read before a reopen: old connection
       arrival_ns_ = c.arrival_ns;
       for (uint8_t b : c.bytes)
         if (reader_.push(b)) handle_packet();
