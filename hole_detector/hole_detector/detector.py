@@ -348,7 +348,7 @@ def local_normal(centre_2d, surface):
     return n / np.linalg.norm(n)
 
 
-def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
+def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False, down=None, known=()):
     """Find every hole whose top rim plus ring lies inside [lo + guard, hi - guard] along y.
 
     `points` is the full-resolution crop (N x 3). The guard is dropped at `lo` when that is
@@ -356,10 +356,13 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
     when the crop has no usable top surface. Gaps cut by the crop ends are in neither list:
     they are retried on the next crop. `view` is for display: the downsampled crop ("points"),
     its depth below the fitted surface ("depth") and the unscanned bands ("bands", 4 corners each).
+    `down`: the crop already downsampled (the Tracker caches it), else it is computed here. `known`: (centre,
+    radius) of holes already reported; a gap that matches one (within dedupe_tol) is skipped, not re-measured.
     """
     if len(points) < 3:
         return None
-    down = voxel_down(points, p["voxel"])
+    if down is None:
+        down = voxel_down(points, p["voxel"])
     found = find_top_surface(down, p)
     if found is None:
         log("no top surface in this crop")
@@ -369,7 +372,7 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
     on_surface = np.abs(depth) < p["surface_tol"]
     openings, pixels, image = find_openings(uv, on_surface, p)
     image["u_range"] = (uv[:, 0].min(), uv[:, 0].max())
-    full_uv, full_depth = surface_depth(points, surface)
+    ys = points[:, 1]
     holes, rejected = [], []
     for region in openings:
         rim_image = ndimage.binary_dilation(region, iterations=2) & ~region
@@ -383,6 +386,8 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         reach = radius + p["ring"]
         if centre[1] - reach < lo_limit or centre[1] + reach > hi - p["guard"]:
             continue                                   # not fully scanned (or at the crop's open end)
+        if any(np.linalg.norm(centre - c) < p["dedupe_tol"] and abs(radius - r) * 2 < p["dedupe_tol"] for c, r in known):
+            continue                                   # reported already
 
         def reject(reason):
             log("skip gap at y=%.1f mm: %s" % (centre[1] * 1000, reason))
@@ -396,6 +401,12 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         if coverage < p["min_rim_coverage"] or scanned_share < p["min_scanned_share"] or not both_ends:
             reject("rim %.0f%% of %.0f%% scanned" % (coverage * 100, scanned_share * 100))
             continue
+        # Full-resolution points only around this gap: every test below stays within the refitted radius
+        # (<= 1.5 x radius) + ring or + boundary_margin; 4 mm more covers the surface tilt and the gap's depth.
+        box = 1.5 * radius + max(p["ring"], p["boundary_margin"]) + 0.004
+        near_points = points[np.abs(ys - centre[1]) < box]
+        near_points = near_points[np.abs(near_points[:, 0] - centre[0]) < box]
+        full_uv, full_depth = surface_depth(near_points, surface)
         r = np.linalg.norm(full_uv - centre_2d, axis=1)
         # The cone tests use the skin just outside the ring as zero: the crop's surface fit can be off by
         # a tenth of a millimetre on a long, bent panel.
@@ -422,7 +433,7 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False):
         # widen the crop overlap if wider complete cut-outs are needed.
         boundary = (r <= radius + p["boundary_margin"]) & (np.abs(full_depth) < p["max_depth"])
         holes.append(Hole(centre, centre_2d, radius, rms, coverage, scanned_share, bool(scanned_share < 1),
-                          bool(countersunk), local_normal(centre_2d, surface), surface, points[boundary]))
+                          bool(countersunk), local_normal(centre_2d, surface), surface, near_points[boundary]))
     return holes, rejected, {"points": down, "depth": depth, "bands": band_corners(image, uv[on_surface], surface)}
 
 
@@ -494,6 +505,8 @@ class Tracker:
         self.bands = []            # unscanned bands behind the laser, 4 corners each (id = index + 1)
         self.shown_y = -np.inf     # the deviation view has been published up to here
         self.rejections = 0        # ids stay unique when a rejection later turns into a hole
+        self.voxels = np.empty((0, 3))  # downsampled voxel rows already complete (worked-on frame)
+        self.voxel_row = -np.inf   # rows below this index are in `voxels`
 
     def feed(self, points, stamp):
         """Process one cumulative cloud. Returns (was_reset, new_holes).
@@ -530,8 +543,9 @@ class Tracker:
         overlap = p["max_diam"] / 2 + p["ring"] + p["guard"]
         crop_lo = self.done_y - overlap
         crop = points[y > crop_lo]
-        found = detect(crop, p, crop[:, 1].min(), frontier, self.log,
-                       lo_is_scan_start=crop_lo < self.start_y) if len(crop) > 1000 else None
+        found = detect(crop, p, crop[:, 1].min(), frontier, self.log, lo_is_scan_start=crop_lo < self.start_y,
+                       down=self.downsample(crop, frontier),
+                       known=[(h.centre * [s, s, 1], h.radius) for h in self.holes]) if len(crop) > 1000 else None
         if found is None:
             return was_reset, []         # nothing decided: keep done_y, so this strip is retried
         holes, rejected, self.view = found
@@ -566,6 +580,20 @@ class Tracker:
                 self.rejected.append(gap)
         return was_reset, new
 
+    def downsample(self, crop, frontier):
+        """voxel_down of the crop, reusing voxel rows (along y) that are complete: profiles arrive in scan
+        order, so a row behind the frontier gets no more points. Only the newest rows are averaged again."""
+        voxel = self.p["voxel"]
+        row = np.floor(crop[:, 1] / voxel)
+        cached = np.floor(self.voxels[:, 1] / voxel)
+        self.voxels = self.voxels[cached >= row.min()]               # rows the crop no longer reaches
+        fresh = voxel_down(crop[row >= self.voxel_row], voxel) if (row >= self.voxel_row).any() else np.empty((0, 3))
+        done = np.floor(frontier / voxel)                            # rows below this are complete
+        complete = np.floor(fresh[:, 1] / voxel) < done
+        self.voxels = np.vstack((self.voxels, fresh[complete]))
+        self.voxel_row = max(self.voxel_row, done)
+        return np.vstack((self.voxels, fresh[~complete]))
+
     def turn(self, lo, hi):
         """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan
         (the low end grows by 2 mm more than the high end) restarts the progress, mirrored; what was
@@ -578,6 +606,7 @@ class Tracker:
                 self.sign = sign
                 self.done_y = self.frontier = self.shown_y = -np.inf
                 self.start_y = np.inf
+                self.voxels, self.voxel_row = np.empty((0, 3)), -np.inf
         self.y_range = (lo, hi)
 
     def raw_y(self, y):

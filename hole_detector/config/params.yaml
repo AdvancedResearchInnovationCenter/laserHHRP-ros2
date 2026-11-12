@@ -4,6 +4,7 @@ hole_detector:
     input_type: frame               # frame: build the cloud from /scan/frame profiles; cloud: a cumulative PointCloud2
     input_topic: /scan/frame        # /scan/cloud_view with input_type: cloud
     out_dir: ~/hole_detector_out   # one scan_<time>/ folder per scan: summary.csv + hole PCDs
+    period: 0.2           # s between detection cycles (frame input); the hole is published within one cycle
     viz_surface: true     # publish /holes/surface (decided strip coloured by depth); false saves CPU/network on the Pi
     voxel: 0.3            # downsample grid
     surface_tol: 0.5      # top-surface band; the top diameter is measured at this depth

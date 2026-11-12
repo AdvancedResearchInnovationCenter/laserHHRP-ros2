@@ -8,6 +8,7 @@ import importlib.util
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -29,6 +30,9 @@ BASELINE = {DATA / "rosbag2_2026_10_27-16_27_45": ["csk_1"], DATA / "rosbag2_202
             DATA / "rosbag2_2026_10_27-16_35_10": ["csk_3"],
             DATA / "rosbag2_2026_10_27-14_45_24": ["holes_1_scan1", "holes_1_scan2", "holes_1_scan3"],
             FLAP: ["flap1"]}
+# mm: centres and top diameters vs offline_runs. 0.1 mm since the 0.2 s cycle (user, 2026-11-12): the reused
+# voxel rows change the surface fit's sample slightly; was 0.002 mm (bit-for-bit refactors).
+BASELINE_TOL = 0.1
 # Real holes the detector misses on purpose (bad data), shown in RViz with the reason.
 KNOWN_REJECTED = {"csk_1": (0.165, "not round"), "holes_1_scan1": (0.1565, "not round")}
 FLAP_FRAME_HOLES = 20             # every hole in the flap's /scan/frame profiles (checked by eye in CloudCompare)
@@ -44,7 +48,8 @@ PARTIAL = {0.105}
 # Holes per bag from /scan/cloud_view, and how many are partial (cut by the laser's 25 mm field). a_1903's
 # edge row is only ~50 % in the field (rejected); its first and last holes lack the skin ring at the scan ends.
 PANEL = DATA.parent / "panel_12112026"
-PANEL_HOLES = {"a_1903": (13, 0), "b_1904": (12, 3)}
+# b_1904: one hole sits right at an unscanned band edge (partial or not by a hair; 4 since the 0.2 s cycle).
+PANEL_HOLES = {"a_1903": (13, 0), "b_1904": (12, 4)}
 
 
 def read_pcd(path):
@@ -325,6 +330,29 @@ def test_panel_bags():
         assert gaps.min() > 0.010, "a hole reported twice"
 
 
+def test_bag_frames_rebuild():
+    """The cloud-only panel bag rebuilds its final cloud as decreasing-y laser profiles."""
+    from frames import bag_frames
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from sensor_msgs.msg import PointCloud2
+    from sensor_msgs_py import point_cloud2
+    bag = PANEL / "b_1904"
+    reader = rosbag2_py.SequentialReader()
+    reader.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),
+                rosbag2_py.ConverterOptions("cdr", "cdr"))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=["/scan/cloud"]))
+    final = None
+    while reader.has_next():
+        _, data, _ = reader.read_next()
+        msg = deserialize_message(data, PointCloud2)
+        final = point_cloud2.read_points_numpy(msg, field_names=("x", "y", "z"), skip_nans=True).astype(np.float64)
+    frames = list(bag_frames(bag))
+    rebuilt = np.vstack([np.column_stack((x, np.full(len(x), y), z)) for _, x, y, z, *_ in frames])
+    assert len(frames) >= 2000 and np.all(np.diff([f[2] for f in frames]) < 0)
+    assert np.array_equal(np.array(sorted(map(tuple, rebuilt))), np.array(sorted(map(tuple, final))))
+
+
 def test_real_bag_counts():
     for bag, counts in BAG_COUNTS.items():
         if not bag.exists():
@@ -378,7 +406,7 @@ def frame_scans(bag, params=None):
 
 def test_replay_matches_baseline():
     """Every bag's frame replay reproduces the saved results (offline_runs) row for row: refactors and
-    speed-ups must not move a hole. Returns the flap holes."""
+    speed-ups must not move a hole (more than BASELINE_TOL). Returns the flap holes."""
     flap = None
     for bag, names in BASELINE.items():
         if not bag.exists():
@@ -394,10 +422,12 @@ def test_replay_matches_baseline():
             with (OFFLINE / name / "summary.csv").open() as handle:
                 rows = list(csv.DictReader(handle))
             assert len(holes) == len(rows), "%s: %d holes, baseline %d" % (name, len(holes), len(rows))
-            for hole, row in zip(holes, rows):
+            # Matched by place, not order: a re-checked rejection can come out a cycle earlier or later.
+            for row in rows:
                 want = np.array([float(row[k]) for k in ("cx_mm", "cy_mm", "cz_mm", "top_diam_mm")])
+                hole = min(holes, key=lambda h: np.linalg.norm(h.centre * 1000 - want[:3]))
                 got = np.append(hole.centre * 1000, 2000 * hole.radius)
-                assert np.abs(got - want).max() < 0.002, "%s #%s: %s vs baseline %s" % (name, row["id"], got, want)
+                assert np.abs(got - want).max() < BASELINE_TOL, "%s #%s: %s vs baseline %s" % (name, row["id"], got, want)
         if bag == FLAP:
             flap = scans[0][0]
     return flap
@@ -428,9 +458,10 @@ def test_boundary_margin():
     with (OFFLINE / "flap1" / "summary.csv").open() as handle:
         rows = list(csv.DictReader(handle))
     assert len(holes) == len(rows), "%d holes, baseline %d" % (len(holes), len(rows))
-    for hole, row in zip(holes, rows):
+    for row in rows:
         want = np.array([float(row[k]) for k in ("cx_mm", "cy_mm", "cz_mm", "top_diam_mm")])
-        assert np.abs(np.append(hole.centre * 1000, 2000 * hole.radius) - want).max() < 0.002, row["id"]
+        hole = min(holes, key=lambda h: np.linalg.norm(h.centre * 1000 - want[:3]))
+        assert np.abs(np.append(hole.centre * 1000, 2000 * hole.radius) - want).max() < BASELINE_TOL, row["id"]
         assert 0.0075 < in_plane_reach(hole) < 0.0085, "#%s cut-out not 8 mm wide" % row["id"]
     print("boundary_margin: csk_3 batch identical, flap 8 mm replay %d holes" % len(holes))
 
@@ -443,6 +474,51 @@ def test_flap_from_frames(found):
     centres = np.array([h.centre for h in found])
     gaps = np.linalg.norm(centres[:, None] - centres[None], axis=2) + np.eye(len(centres))
     assert gaps.min() > 0.010, "a hole was published twice"
+
+
+LATE = {"rosbag2_2026_10_27-14_45_24": 1}     # holes allowed past 0.5 s per bag (see test_latency)
+
+
+def test_latency(period=0.2):
+    """Simulated real time at the node's cycle: every hole comes out once, < 0.5 s after the frame that
+    completes it (far edge + ring + guard), with detect <= 150 ms median and <= 300 ms worst per cycle."""
+    from frames import replay
+    expected = {DATA / "rosbag2_2026_10_27-16_27_45": 5, DATA / "rosbag2_2026_10_27-16_33_35": 7,
+                DATA / "rosbag2_2026_10_27-16_35_10": 7, DATA / "rosbag2_2026_10_27-14_45_24": 19, FLAP: 20,
+                PANEL / "a_1903": PANEL_HOLES["a_1903"][0], PANEL / "b_1904": PANEL_HOLES["b_1904"][0]}
+    for bag, count in expected.items():
+        if not bag.exists():
+            print("skip %s: not copied here" % bag.name)
+            continue
+        run = replay(bag, Tracker(log=lambda *_: None), period=period)
+        median, worst, late = np.median(run.cycle), max(run.cycle), max(run.latency)
+
+        print("%s latency: %d holes, max %.2f s, cycle median %.0f ms worst %.0f ms" % (
+            bag.name, len(run.features), late, median * 1000, worst * 1000))
+        assert len(run.features) == count, "%s: %d holes, expected %d" % (bag.name, len(run.features), count)
+        slow = sum(lat >= 0.5 for lat in run.latency)
+        # holes_1 scan 3, y = 45 mm: first "not round", it passes on a later crop (a re-checked rejection).
+        assert slow <= LATE.get(bag.name, 0), "%s: %d holes later than 0.5 s" % (bag.name, slow)
+        assert median <= 0.150 and worst <= 0.300, bag.name
+
+
+def test_writer_drains(tmp=Path("/tmp/hole_writer_test")):
+    """ScanFolder writes in the background: after close() every queued row and PCD is on disk, PCDs raw."""
+    import shutil
+    from hole_detector import results
+    shutil.rmtree(tmp, ignore_errors=True)
+    folder, rng = results.ScanFolder(tmp, log=lambda *_: None), np.random.default_rng(0)
+    holes = []
+    for i in range(1, 21):
+        boundary = rng.normal(size=(500, 3)).astype(np.float32).astype(np.float64)
+        holes.append(SimpleNamespace(id=i, centre=np.array([0.0, i * 0.01, 0.07]), radius=0.004, rms=1e-5,
+                                     coverage=1.0, countersunk=True, partial=False, scanned_share=1.0, boundary=boundary))
+        folder.save(holes[-1], holes[-2] if i > 1 else None)
+    folder.close()
+    rows = (folder.path / "summary.csv").read_text().splitlines()
+    assert len(rows) == 21 and [r.split(",")[0] for r in rows[1:]] == [str(i) for i in range(1, 21)]
+    for hole in holes:
+        assert np.array_equal(read_pcd(folder.path / ("hole_%02d.pcd" % hole.id)), hole.boundary), hole.id
 
 
 def test_launch_single_node():
@@ -495,6 +571,7 @@ def test_hole_markers():
 
 if __name__ == "__main__":
     test_launch_single_node()
+    test_writer_drains()
     test_empty_cloud_is_ignored()
     test_synthetic_plate()
     test_synthetic_incremental()
@@ -512,4 +589,6 @@ if __name__ == "__main__":
     test_flap_from_frames(test_replay_matches_baseline())
     test_boundary_margin()
     test_panel_bags()
+    test_latency()
+    test_bag_frames_rebuild()
     print("all checks passed")

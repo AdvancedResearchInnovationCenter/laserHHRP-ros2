@@ -2,6 +2,8 @@
 
 import csv
 import json
+import queue
+import threading
 import time
 
 import numpy as np
@@ -11,10 +13,30 @@ CSV_COLUMNS = ["id", "cx_mm", "cy_mm", "cz_mm", "top_diam_mm", "fit_rms_mm", "ri
 
 
 class ScanFolder:
-    """<out_root>/scan_<time>/: summary.csv plus hole_NN.pcd. Made at the scan's first hole."""
+    """<out_root>/scan_<time>/: summary.csv plus hole_NN.pcd. Made at the scan's first hole.
+
+    Rows and PCDs are written by a worker thread in save order, so detection never waits for the disk;
+    close() waits until everything queued is written."""
 
     def __init__(self, out_root, log):
         self.root, self.log, self.path = out_root, log, None
+        self.jobs = queue.Queue(maxsize=64)        # full: save() waits (the disk is far behind)
+        threading.Thread(target=self.work, daemon=True).start()
+
+    def work(self):
+        while True:
+            path, row, name, points = self.jobs.get()
+            try:
+                with (path / "summary.csv").open("a", newline="") as handle:
+                    csv.writer(handle).writerow(row)
+                write_pcd(path / name, points)
+            except OSError as error:
+                self.log("could not save %s: %s" % (name, error))
+            finally:
+                self.jobs.task_done()
+
+    def close(self):
+        self.jobs.join()
 
     def new_scan(self):
         self.path = None
@@ -27,13 +49,11 @@ class ScanFolder:
             with (self.path / "summary.csv").open("w", newline="") as handle:
                 csv.writer(handle).writerow(CSV_COLUMNS)
             self.log("saving results to %s" % self.path)
-        with (self.path / "summary.csv").open("a", newline="") as handle:
-            csv.writer(handle).writerow([
-                hole.id, *("%.3f" % v for v in hole.centre * 1000), "%.3f" % (2000 * hole.radius),
-                "%.3f" % (hole.rms * 1000), "%.2f" % hole.coverage, hole.countersunk, hole.partial,
-                "%.2f" % hole.scanned_share,
-                "" if previous is None else "%.3f" % (np.linalg.norm(hole.centre - previous.centre) * 1000)])
-        write_pcd(self.path / ("hole_%02d.pcd" % hole.id), hole.boundary)
+        row = [hole.id, *("%.3f" % v for v in hole.centre * 1000), "%.3f" % (2000 * hole.radius),
+               "%.3f" % (hole.rms * 1000), "%.2f" % hole.coverage, hole.countersunk, hole.partial,
+               "%.2f" % hole.scanned_share,
+               "" if previous is None else "%.3f" % (np.linalg.norm(hole.centre - previous.centre) * 1000)]
+        self.jobs.put((self.path, row, "hole_%02d.pcd" % hole.id, np.array(hole.boundary)))
 
 
 def write_pcd(path, points):
