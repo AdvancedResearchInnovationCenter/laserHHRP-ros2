@@ -4,6 +4,7 @@ Run in the ROS container:  python3 /bags/hole_detector/test/test_detector.py
 """
 
 import csv
+import importlib.util
 import sys
 import time
 from pathlib import Path
@@ -71,6 +72,24 @@ def match(holes, ref):
             centre[1] * 1000, errors[0] * 1000, 2 * hole.radius * 1000, d_top * 1000))
         worst = [max(w, e) for w, e in zip(worst, errors)]
     return worst
+
+
+
+def launch_nodes(path):
+    """(package, executable) of every node the launch file starts, with default launch arguments."""
+    from launch import LaunchContext
+    from launch.actions import OpaqueFunction
+    spec = importlib.util.spec_from_file_location("launch_file", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    context = LaunchContext()
+    nodes = []
+    for action in module.generate_launch_description().entities:
+        if isinstance(action, OpaqueFunction):
+            nodes += action.execute(context) or []
+        else:
+            action.visit(context)
+    return [(n.node_package, n.node_executable) for n in nodes if hasattr(n, "node_executable")]
 
 
 def test_batch_matches_reference():
@@ -426,6 +445,12 @@ def test_flap_from_frames(found):
     assert gaps.min() > 0.010, "a hole was published twice"
 
 
+def test_launch_single_node():
+    """The package's launch file starts its own node only (holes / rivets / both: laser_hhrp detectors.launch.py)."""
+    root = Path(__file__).resolve().parents[1]
+    assert launch_nodes(root / "launch" / "hole_detector.launch.py") == [("hole_detector", "hole_detector")]
+
+
 def test_empty_cloud_is_ignored():
     assert Tracker(log=lambda *_: None).feed(np.empty((0, 3)), 0.0) == (False, [])
 
@@ -469,6 +494,7 @@ def test_hole_markers():
 
 
 if __name__ == "__main__":
+    test_launch_single_node()
     test_empty_cloud_is_ignored()
     test_synthetic_plate()
     test_synthetic_incremental()

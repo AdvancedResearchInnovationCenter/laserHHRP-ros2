@@ -17,8 +17,8 @@ from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 
-from hole_detector.rivets import results, viz
-from hole_detector.rivets.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points
+from rivet_detector import results, viz
+from rivet_detector.detector import DEFAULTS, UNITLESS, FrameCloud, Tracker, circle_points
 
 try:
     from laser_hhrp.msg import InspectionResult, ScanFrame

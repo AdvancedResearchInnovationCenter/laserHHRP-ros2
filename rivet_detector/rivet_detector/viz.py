@@ -8,7 +8,7 @@ from sensor_msgs.msg import PointField
 from sensor_msgs_py import point_cloud2
 from visualization_msgs.msg import Marker
 
-from hole_detector.rivets.detector import circle_points
+from rivet_detector.detector import circle_points
 
 STYLE = {
     # Colours (r, g, b) by status.

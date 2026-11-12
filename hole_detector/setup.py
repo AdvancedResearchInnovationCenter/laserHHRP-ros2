@@ -5,7 +5,7 @@ from setuptools import setup
 setup(
     name="hole_detector",
     version="0.1.0",
-    packages=["hole_detector", "hole_detector.rivets"],
+    packages=["hole_detector"],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/hole_detector"]),
         ("share/hole_detector", ["package.xml"]),
@@ -15,6 +15,5 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    entry_points={"console_scripts": ["hole_detector = hole_detector.node:main",
-                                    "rivet_detector = hole_detector.rivets.node:main"]},
+    entry_points={"console_scripts": ["hole_detector = hole_detector.node:main"]},
 )

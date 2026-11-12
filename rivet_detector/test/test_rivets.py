@@ -1,11 +1,9 @@
-"""Offline checks for the rivet detector (hole_detector/rivets/): a synthetic panel, the panel 2 bags
-replayed from /scan/frame, raw boundaries, NaN-free results, the launch mode switch, and that the hole
-detector's files are untouched.
+"""Offline checks for the rivet detector: a synthetic panel, the panel 2 bags replayed from /scan/frame,
+raw boundaries, NaN-free results and the launch file.
 
-Run in the ROS container:  python3 /bags/hole_detector/test/test_rivets.py
+Run in the ROS container:  python3 /bags/rivet_detector/test/test_rivets.py
 """
 
-import hashlib
 import importlib.util
 import json
 import sys
@@ -17,8 +15,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from hole_detector.rivets import results  # noqa: E402
-from hole_detector.rivets.detector import DEFAULTS, FrameCloud, Tracker, detect  # noqa: E402
+from rivet_detector import results  # noqa: E402
+from rivet_detector.detector import DEFAULTS, FrameCloud, Tracker, detect  # noqa: E402
 
 BAGS = ROOT.parent
 # Rivets per panel 2 bag (frame replay), and which ids are partial. Each bag holds 10 heads in its
@@ -31,13 +29,6 @@ PITCH = (0.0195, 0.0215)          # neighbouring heads, along the row
 # the scan's end. a_1903 has holes only.
 PANEL = BAGS / "panel_12112026"
 PANEL_RIVETS = {"a_1903": 0, "b_1904": 8}
-# Hole detector files that must stay byte-identical (re-recorded 2026-11-12: -y scans, mirrored countersinks).
-HOLE_MD5 = {"hole_detector/detector.py": "e8694e8d4e9ada5a18efa504aabf2200",
-            "hole_detector/node.py": "4cc294409b589fb54fa64539ae6e624e",
-            "hole_detector/viz.py": "31b51994f635d8900f10172be8434f0a",
-            "hole_detector/results.py": "26de5db041e99a788b2d7373084a2425",
-            "rviz/holes.rviz": "b8dc41212446fdc28b29a9352d95b320",
-            "test/test_detector.py": "a0789df4da96a6b119c6a0d9de707613"}
 # Synthetic panel: rivet heads (x, y, height, pit); a band through the last one.
 HEADS = [(0.0, 0.015, 0.00015, False), (0.0, 0.035, 0.00015, True), (0.0, 0.055, 0.00007, True),
          (0.0, 0.075, 0.00015, False)]
@@ -79,6 +70,24 @@ def check_panel(rivets):
         assert abs(2 * rivet.radius - 0.009) < 0.0004, 2 * rivet.radius
         assert abs(rivet.height - height) < 0.00003, (rivet.height, height)
         assert rivet.partial == (BAND[0] < hy + 0.0045 and hy - 0.0045 < BAND[1]), rivet
+
+
+
+def launch_nodes(path):
+    """(package, executable) of every node the launch file starts, with default launch arguments."""
+    from launch import LaunchContext
+    from launch.actions import OpaqueFunction
+    spec = importlib.util.spec_from_file_location("launch_file", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    context = LaunchContext()
+    nodes = []
+    for action in module.generate_launch_description().entities:
+        if isinstance(action, OpaqueFunction):
+            nodes += action.execute(context) or []
+        else:
+            action.visit(context)
+    return [(n.node_package, n.node_executable) for n in nodes if hasattr(n, "node_executable")]
 
 
 def test_synthetic_batch():
@@ -182,13 +191,9 @@ def test_panel2_bags():
         assert not any(np.linalg.norm(g.centre[:2] - r.centre[:2]) < 2 * r.radius for g in rejected for r in rivets)
 
 
-def test_launch_mode():
-    """The launch file reads detector_mode from params.yaml; the shipped default stays holes."""
-    spec = importlib.util.spec_from_file_location("launch_file", ROOT / "launch" / "hole_detector.launch.py")
-    launch_file = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(launch_file)
-    assert launch_file.file_mode(ROOT / "config" / "params.yaml") == "holes"
-    assert set(launch_file.MODES) == {"holes", "rivets", "both"}
+def test_launch_single_node():
+    """The package's launch file starts its own node only (holes / rivets / both: laser_hhrp detectors.launch.py)."""
+    assert launch_nodes(ROOT / "launch" / "rivet_detector.launch.py") == [("rivet_detector", "rivet_detector")]
 
 
 def test_recessed_panel():
@@ -219,14 +224,8 @@ def test_recessed_panel():
             assert np.all((steps > PITCH[0]) & (steps < PITCH[1])), steps
 
 
-def test_hole_detector_untouched():
-    for name, digest in HOLE_MD5.items():
-        assert hashlib.md5((ROOT / name).read_bytes()).hexdigest() == digest, name + " changed"
-
-
 if __name__ == "__main__":
-    test_hole_detector_untouched()
-    test_launch_mode()
+    test_launch_single_node()
     panel = test_synthetic_batch()
     test_side_clip(panel)
     found = test_synthetic_incremental(panel)

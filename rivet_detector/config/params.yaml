@@ -1,0 +1,25 @@
+# Lengths in mm (max_normal_angle in degrees; the edge limits below are unitless).
+# Rivet heads: round heads on the skin.
+rivet_detector:
+  ros__parameters:
+    input_type: frame
+    input_topic: /scan/frame
+    out_dir: ~/hole_detector_out   # one rivet_scan_<time>/ folder per scan: summary.csv + rivet PCDs
+    viz_surface: true
+    voxel: 0.3
+    surface_tol: 0.5      # skin band for the crop's surface fit
+    grid: 0.3             # pixel size of the height image the candidates are found on
+    rivet_diam: 9.0       # nominal head diameter
+    diam_tol: 2.0         # heads of rivet_diam +- this are rivets
+    min_height: 0.04      # a head stands at least this far proud of the skin ring around it
+    ring: 2.0             # skin ring outside the head (skin level; must be in the crop)
+    max_depth: 8.5        # boundary cut: deeper points (floor seen through a nearby hole) are left out
+    boundary_margin: 5.0  # saved boundary cut-out = head edge + this (output only)
+    guard: 3.0            # heads this close to a crop end wait for the next cloud
+    dedupe_tol: 2.0
+    max_normal_angle: 18.0
+    # Unitless acceptance limits for the head edge:
+    min_rim_coverage: 0.6   # share of the scanned edge sectors that must hold an edge point
+    max_roundness: 0.08     # edge-fit RMS / radius
+    min_scanned_share: 0.6  # share of the edge outside unscanned bands; below 1 the rivet is flagged partial
+    polarity: proud         # proud: heads above the skin | recessed: below it (reported height < 0)
