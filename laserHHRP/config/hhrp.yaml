@@ -52,7 +52,7 @@
     inspection.surface_deviation_limit_m: 0.0001
 
     # ---- scan switch + LEDs (scan_switch_node, Pi 5 GPIO header, BCM numbers) ----
-    gpio.chip: 4                     # Pi 5 header under Ubuntu 24.04 ("chip" error -> 0)
+    gpio.chip: -1                    # -1 = auto (the Pi 5 header, pinctrl-rp1); or a fixed /dev/gpiochipN number
     gpio.switch: 25                  # pin 22 -> button -> GND pin 20 (internal pull-up)
     gpio.green: 22                   # pin 15: scanning
     gpio.yellow: 27                  # pin 13: not scanning

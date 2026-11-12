@@ -78,7 +78,7 @@ endif()
 
 # ---- other files -------------------------------------------------------------------------------
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
-install(PROGRAMS scripts/read_session.py scripts/check_session.py scripts/timed_scan.py
+install(PROGRAMS scripts/read_session.py scripts/check_session.py scripts/timed_scan.py scripts/scan_switch_node.py
         DESTINATION lib/${PROJECT_NAME})
 
 # ---- tests -------------------------------------------------------------------------------------

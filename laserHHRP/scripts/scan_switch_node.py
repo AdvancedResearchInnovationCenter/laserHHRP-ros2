@@ -15,6 +15,7 @@ Started by hhrp.launch.py; scan_switch:=false on a machine without the GPIO head
 
 from __future__ import annotations
 
+import glob
 import sys
 
 import rclpy
@@ -23,6 +24,33 @@ from rclpy.node import Node
 from std_srvs.srv import Trigger
 
 from laser_hhrp.msg import ScanStatus
+
+
+HEADER_LABEL = "pinctrl-rp1"  # the Pi 5 40-pin header; its /dev/gpiochipN number depends on the kernel (4, 15, ...)
+
+
+def header_chip(chips) -> int | None:
+    """Lowest chip number labelled as the Pi 5 header, from (number, label) pairs; None if there is none."""
+    return min((number for number, label in chips if label == HEADER_LABEL), default=None)
+
+
+def readable_chips() -> list[tuple[int, str]]:
+    """(number, label) of each /dev/gpiochipN this user can open; root-only chips are skipped."""
+    import lgpio
+    chips = []
+    for path in glob.glob("/dev/gpiochip*"):
+        number = path[len("/dev/gpiochip"):]
+        if not number.isdigit():
+            continue
+        try:
+            handle = lgpio.gpiochip_open(int(number))
+        except lgpio.error:
+            continue
+        try:
+            chips.append((int(number), lgpio.gpio_get_chip_info(handle)[3]))
+        finally:
+            lgpio.gpiochip_close(handle)
+    return sorted(chips)
 
 
 def leds_for(scanning: bool, speed_mps: float, max_speed_mps: float,
@@ -38,12 +66,33 @@ class ScanSwitch(Node):
     def __init__(self) -> None:
         super().__init__("scan_switch")
         from gpiozero import LED, Button
-        from gpiozero.pins.lgpio import LGPIOFactory
+        import lgpio
+        from gpiozero.pins.lgpio import LGPIOFactory, LGPIOPin
+        from gpiozero.pins.local import LocalPiFactory
 
         def param(name, default):
             return self.declare_parameter(name, default).value
 
-        pins = LGPIOFactory(chip=param("gpio.chip", 4))
+        chip = param("gpio.chip", -1)
+        if chip < 0:
+            chips = readable_chips()
+            chip = header_chip(chips)
+            if chip is None:
+                raise RuntimeError(f"no GPIO chip labelled {HEADER_LABEL} among the readable ones "
+                                   f"{chips}; set gpio.chip in hhrp.yaml")
+        self.get_logger().info(f"GPIO header: /dev/gpiochip{chip}")
+
+        class ChipFactory(LGPIOFactory):
+            # gpiozero 2.0.1's LGPIOFactory ignores its chip argument and opens chip 4 on a Pi 5,
+            # which does not exist under the RT kernel; this is its __init__ with the chip passed in.
+            # shortcut: copies gpiozero internals, recheck when python3-gpiozero is upgraded.
+            def __init__(self, chip):
+                LocalPiFactory.__init__(self)
+                self._handle = lgpio.gpiochip_open(chip)
+                self._chip = chip
+                self.pin_class = LGPIOPin
+
+        pins = ChipFactory(chip)  # pins are BCM numbers (RP1 line offsets)
         self.green = LED(param("gpio.green", 22), pin_factory=pins)
         self.yellow = LED(param("gpio.yellow", 27), pin_factory=pins)
         self.red = LED(param("gpio.red", 17), pin_factory=pins)
@@ -109,6 +158,10 @@ def self_test() -> int:
     assert leds_for(True, -0.010, 0.011, 0.8) == (True, False, True)   # backwards counts too
     assert leds_for(False, 0.010, 0.011, 0.8) == (False, True, False)  # stopped: no red
     assert leds_for(True, 0.010, 0.0, 0.8) == (True, False, False)     # no maximum known yet
+    pi5_rt = [(11, "gpio-brcmstb@107d517c00"), (15, "pinctrl-rp1"), (16, "ftdi-cbus")]
+    assert header_chip(pi5_rt) == 15                                    # new Pi, RT kernel
+    assert header_chip([(0, "gpio-brcmstb@107d508500"), (4, "pinctrl-rp1")]) == 4  # old Pi
+    assert header_chip([(0, "pinctrl-bcm2711")]) is None               # not a Pi 5
     print("scan_switch_node self-test: OK")
     return 0
 
