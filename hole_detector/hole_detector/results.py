@@ -44,8 +44,16 @@ class ScanFolder:
     def save(self, hole, previous):
         """Append the hole's row and write its raw boundary points. `previous` is the hole before it, or None."""
         if self.path is None:
-            self.path = self.root / time.strftime("scan_%Y%m%d_%H%M%S")
-            self.path.mkdir(parents=True, exist_ok=True)
+            base = self.root / time.strftime("scan_%Y%m%d_%H%M%S")
+            self.root.mkdir(parents=True, exist_ok=True)
+            self.path, n = base, 1
+            while True:                     # two scans in one second must not share (overwrite) a folder
+                try:
+                    self.path.mkdir()
+                    break
+                except FileExistsError:
+                    n += 1
+                    self.path = base.with_name("%s_%d" % (base.name, n))
             with (self.path / "summary.csv").open("w", newline="") as handle:
                 csv.writer(handle).writerow(CSV_COLUMNS)
             self.log("saving results to %s" % self.path)

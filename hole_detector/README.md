@@ -11,14 +11,18 @@ Finds holes (plain or countersunk, through or blind; the top rim is measured) wh
 # in the ros2_visualizer container (/bags is read-only, so build outside it)
 source /opt/ros/jazzy/setup.bash && source /laser_ws/install/setup.bash
 mkdir -p /root/hole_ws && cd /root/hole_ws
-colcon build --base-paths /bags/hole_detector --symlink-install
+colcon build --base-paths /bags/hole_detector /bags/rivet_detector --symlink-install
 source install/setup.bash
 
-ros2 launch hole_detector hole_detector.launch.py rviz:=true
+ros2 launch hole_detector hole_detector.launch.py rviz:=true     # holes only
 ros2 bag play /bags/flap1_05112026 --topics /scan/frame
 ```
 
-**Input.** By default (`input_type: frame`) the node builds the cloud itself from the scanner's `/scan/frame` profiles. Each valid point becomes (x, position_m, z), as in `laser_hhrp`'s `point_cloud_node`. Detection runs once a second on the new strip, and points it no longer needs are dropped.
+**Holes, rivets or both.** Rivet heads are found by the separate package `rivet_detector` (next to this one). `ros2 launch laser_hhrp detectors.launch.py [mode:=holes|rivets|both] [rviz:=true]` starts the chosen detectors without the laser hardware (for bags); `mode` defaults to `detection.mode` in `laser_hhrp`'s `config/hhrp.yaml`. `hhrp.launch.py` includes it and passes `mode:=` through.
+
+**Input.** By default (`input_type: frame`) the node builds the cloud itself from the scanner's `/scan/frame` profiles. Each valid point becomes (x, position_m, z), as in `laser_hhrp`'s `point_cloud_node`. Detection runs every `period` (0.2 s) on the newest strip, and points it no longer needs are dropped. A hole is published within about 0.4 s of the laser passing its far edge + ring + guard (laptop; per cycle 25-90 ms median).
+- Per cycle: downsampled voxel rows the laser has passed are reused, full-resolution points are used only in a box around each gap, and a gap that matches a hole already reported is not measured again.
+- Rows and PCDs are written by a worker thread, so detection never waits for the disk; the node drains it on shutdown.
 - This is complete: the Pi's `/scan/cloud_view` lost most of the flap scan, while `/scan/frame` gave all 20 holes.
 - It is also light: 1,278-point messages at 80 Hz instead of a cloud of up to 115 MB every second.
 - Frames are received on their own thread, so a slow detection doesn't drop profiles.
@@ -33,46 +37,17 @@ ros2 run hole_detector hole_detector --ros-args --params-file <params.yaml> -p i
 
 **Where results go.** Started from `hhrp.launch.py`, each scan is saved inside this package, in `~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out/scan_<time>/` (launch argument `holes_out_dir:=` to change it). Started on its own, they go to `out_dir` in `config/params.yaml` (`~/hole_detector_out`), or `out_dir:=` on the launch line.
 
-## Rivet mode
-
-`hole_detector/rivets/` finds **rivet heads**: round heads standing proud of the skin (panel 2: about Ø9 mm, 0.06–0.2 mm high). It is a separate copy of the hole pipeline (same frame input, threading, visualization and raw boundary cut-out) and imports nothing from the hole code. The switch is in `config/params.yaml`:
-
-```yaml
-detector_mode:
-  ros__parameters:
-    mode: holes      # or rivets, or both (a panel with holes and rivets: both nodes run side by side)
-```
-
-`mode:=rivets` (or `mode:=both`) on the launch line overrides it (`colcon build` once after pulling, for the new entry point):
-
-```bash
-ros2 launch hole_detector hole_detector.launch.py mode:=rivets rviz:=true
-ros2 bag play /bags/panel2_09112026_02 --topics /scan/frame
-```
-
-- **Topics:** `/rivets/markers`, `/rivets/progress`, `/rivets/surface`, `/rivets/circles`, `/rivets/poses` and `/rivets/boundary`, with the same contents and colours as the hole topics. Labels read `#3  Ø8.97  rivet` / `h 0.18  rms 0.03  cov 100%`, and the distance lines give the pitch to the nearest rivet. `/inspection/result` carries `feature_type: rivet`, with `detail` JSON `id, d_head_mm, height_mm, rms_mm, edge_coverage, partial, scanned_share`.
-- **Files:** `out_dir/rivet_scan_<time>/` holds `summary.csv` (`id, cx/cy/cz mm, head_diam_mm, head_height_mm, fit_rms_mm, edge_coverage, partial, scanned_share, dist_to_nearest_mm`) and `rivet_NN.pcd`, every raw point within the head edge + `boundary_margin`.
-- **Parameters** are in the `rivet_detector:` section of `config/params.yaml`:
-  - `rivet_diam`: nominal head Ø, 9 mm.
-  - `diam_tol`: accepted ± around `rivet_diam`, 2 mm.
-  - `min_height`: lowest head accepted, 0.04 mm.
-  - `polarity`: `proud` (default) or `recessed`, for heads seen *below* the skin. With the laser's `test.sc1` setup the panel's heads read about 0.1 mm below the skin (the countersinks also read as cones standing above it: the setup seems to flip the laser's Z), so use `recessed` there; the reported height is then negative.
-  - `ring`: the skin ring beyond the head, 2 mm.
-  - The edge acceptance limits work as for holes.
-- **How it works:**
-  1. A matched filter on a height image (just inside minus just outside the nominal edge) gives the candidates.
-  2. Each one is measured on the raw points against the skin ring around it.
-  3. The edge is taken per 15° sector at half the head height, and a circle is fitted to those edge points.
-- **Test:** `python3 /bags/hole_detector/test/test_rivets.py` (about 30 s).
-
 ## Topics (frame `laser`)
 
 | Topic | Content |
 |---|---|
 | `/holes/markers` | Top ring, centre sphere, label `#id  <top diameter in mm>` (+ `(partial)`). Latched |
 | `/holes/circles` | Fitted top circles of all holes, as points with a `hole_id` field. Latched |
+| `/holes/boundary_view` | Every cut-out of the scan, downsampled to 0.3 mm, in one latched cloud: what RViz draws (the raw ones are ~100k points each) |
 | `/holes/boundary` | Per new hole: every raw (not downsampled or filtered) point within the top radius + `boundary_margin` (default 5 mm) of the hole axis, with `hole_id`. Only the floor seen through the hole (deeper than `max_depth`) is cut |
 | `/holes/poses` | Hole centres; the z axis is the local surface normal. Latched |
+| `/holes/progress` | Decided / laser lines and the status: scan, holes, mm scanned, rejected, detect ms |
+| `/holes/surface` | The decided strip coloured by depth; only with `viz_surface: true` (default false: costs CPU on the Pi) |
 | `/inspection/result` | `laser_hhrp/InspectionResult` per hole. `feature_type` is `countersink` or `hole`; `detail` is JSON: `id, d_top_mm, rms_mm, ring_coverage, countersunk, partial, scanned_share`. `-1` means not measured (countersink depth, flushness) |
 
 Parameters are in `config/params.yaml` (mm). Each cloud logs its timing: `convert / detect / publish ms`.
@@ -102,4 +77,7 @@ The test checks:
 - replaying every real bag cloud (also with every 2nd and every 3rd one dropped) gives each hole exactly once;
 - a hole next to the scan start is found;
 - an empty cloud is ignored;
-- `boundary_margin` widens only the cut-out: the same holes and measurements, raw points, and an 8 mm cut-out reaches 8 mm.
+- `boundary_margin` widens only the cut-out: the same holes and measurements, raw points, and an 8 mm cut-out reaches 8 mm;
+- the panel bags (640-point profiles, scan toward -y): 13 and 12 holes;
+- latency: every bag replayed in simulated real time at the 0.2 s cycle (`test/frames.py`; cloud-only bags are rebuilt into profiles): each hole < 0.5 s after the frame that completes it (one pinned re-checked rejection in holes_1), cycle <= 150 ms median, <= 300 ms at the 99th percentile;
+- the PCD writer drains on close; the launch file starts one node; the RViz layout draws no full clouds.

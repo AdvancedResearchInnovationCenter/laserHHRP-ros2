@@ -16,7 +16,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from rivet_detector import results  # noqa: E402
-from rivet_detector.detector import DEFAULTS, FrameCloud, Tracker, detect  # noqa: E402
+from rivet_detector.detector import DEFAULTS, FrameCloud, Tracker, detect, voxel_down  # noqa: E402
 
 BAGS = ROOT.parent
 # Rivets per panel 2 bag (frame replay), and which ids are partial. Each bag holds 10 heads in its
@@ -231,6 +231,16 @@ def test_rviz_is_light(name="rivets.rviz", things="rivets"):
     assert len(view) == 1 and view[0]["Decay Time"] == 0 and view[0]["Topic"]["Durability Policy"] == "Transient Local"
 
 
+def test_downsample_matches_voxel_down(points):
+    """Tracker.downsample (cached voxel rows) gives exactly voxel_down(crop): the same points in the same order,
+    on a crop that grows 0.4 mm at a time and is cut at an arbitrary y (the surface fit samples by index)."""
+    tracker = Tracker(log=lambda *_: None)
+    points = points[np.argsort(points[:, 1], kind="stable")]
+    for end in np.arange(0.004, points[-1, 1], 0.0004):
+        crop = points[(points[:, 1] < end) & (points[:, 1] > end - 0.0437)]
+        assert np.array_equal(tracker.downsample(crop, crop[:, 1].max()), voxel_down(crop, tracker.p["voxel"])), end
+
+
 def test_launch_single_node():
     """The package's launch file starts its own node only (holes / rivets / both: laser_hhrp detectors.launch.py)."""
     assert launch_nodes(ROOT / "launch" / "rivet_detector.launch.py") == [("rivet_detector", "rivet_detector")]
@@ -275,6 +285,7 @@ if __name__ == "__main__":
     test_rviz_is_light()
     panel = test_synthetic_batch()
     test_side_clip(panel)
+    test_downsample_matches_voxel_down(panel)
     test_synthetic_both_signs(panel)
     found = test_synthetic_incremental(panel)
     test_boundary_is_raw(panel, found)

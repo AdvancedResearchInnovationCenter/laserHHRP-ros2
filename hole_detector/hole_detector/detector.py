@@ -74,15 +74,18 @@ class Rejected:
     id: int = 0
 
 
-def voxel_down(points, voxel):
-    """One point (the mean) per occupied voxel."""
+def voxel_down(points, voxel, with_keys=False):
+    """One point (the mean) per occupied voxel, ordered by voxel index (x, then y, then z)."""
     keys = np.floor(points / voxel).astype(np.int64)
-    keys -= keys.min(axis=0)
+    offset = keys.min(axis=0)
+    keys -= offset
     span = keys.max(axis=0) + 1
     # One int64 per voxel: a 1D unique is ~10x faster than unique(axis=0) on rows.
     packed = (keys[:, 0] * span[1] + keys[:, 1]) * span[2] + keys[:, 2]
-    _, index, counts = np.unique(packed, return_inverse=True, return_counts=True)
+    _, first, index, counts = np.unique(packed, return_index=True, return_inverse=True, return_counts=True)
     sums = np.column_stack([np.bincount(index, points[:, k], len(counts)) for k in range(3)])
+    if with_keys:      # each voxel's integer index (x, y, z): the order above, for the Tracker's cache
+        return sums / counts[:, None], (keys + offset)[first]
     return sums / counts[:, None]
 
 
@@ -506,6 +509,7 @@ class Tracker:
         self.shown_y = -np.inf     # the deviation view has been published up to here
         self.rejections = 0        # ids stay unique when a rejection later turns into a hole
         self.voxels = np.empty((0, 3))  # downsampled voxel rows already complete (worked-on frame)
+        self.voxel_keys = np.empty((0, 3), np.int64)   # their voxel indices
         self.voxel_row = -np.inf   # rows below this index are in `voxels`
 
     def feed(self, points, stamp):
@@ -586,19 +590,19 @@ class Tracker:
         (cut by the crop), are averaged again. Same points in the same order as voxel_down(crop): the surface
         fit samples by index, so a different order would move the fit."""
         voxel = self.p["voxel"]
-        row = np.floor(crop[:, 1] / voxel)
+        row = np.floor(crop[:, 1] / voxel).astype(np.int64)
         first = row.min()
-        cached = np.floor(self.voxels[:, 1] / voxel)
-        self.voxels = self.voxels[cached > first]                    # the crop's first row is redone below
-        redo = (row >= self.voxel_row) | (row == first)
-        fresh = voxel_down(crop[redo], voxel)
+        keep = self.voxel_keys[:, 1] > first                         # the crop's first row is redone below
+        self.voxels, self.voxel_keys = self.voxels[keep], self.voxel_keys[keep]
+        fresh, keys = voxel_down(crop[(row >= self.voxel_row) | (row == first)], voxel, with_keys=True)
         done = np.floor(frontier / voxel)                            # rows below this are complete
-        fresh_row = np.floor(fresh[:, 1] / voxel)
-        self.voxels = np.vstack((self.voxels, fresh[(fresh_row < done) & (fresh_row > first)]))
+        complete = (keys[:, 1] < done) & (keys[:, 1] > first)
+        self.voxels = np.vstack((self.voxels, fresh[complete]))
+        self.voxel_keys = np.vstack((self.voxel_keys, keys[complete]))
         self.voxel_row = max(self.voxel_row, done)
-        down = np.vstack((self.voxels, fresh[(fresh_row >= done) | (fresh_row == first)]))
-        # voxel_down's order: by voxel index x, then y, then z
-        return down[np.lexsort(np.floor(down / voxel).T[::-1])]
+        down = np.vstack((self.voxels, fresh[~complete]))
+        down_keys = np.vstack((self.voxel_keys, keys[~complete]))
+        return down[np.lexsort(down_keys.T[::-1])]               # voxel_down's order: by voxel index x, y, z
 
     def turn(self, lo, hi):
         """Follow the scan direction: the end of the raw cloud that grows is the laser's side. A -y scan
@@ -613,6 +617,7 @@ class Tracker:
                 self.done_y = self.frontier = self.shown_y = -np.inf
                 self.start_y = np.inf
                 self.voxels, self.voxel_row = np.empty((0, 3)), -np.inf
+                self.voxel_keys = np.empty((0, 3), np.int64)
         self.y_range = (lo, hi)
 
     def raw_y(self, y):

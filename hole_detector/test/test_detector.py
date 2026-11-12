@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from hole_detector.detector import DEFAULTS, FrameCloud, Rejected, Tracker, detect  # noqa: E402
+from hole_detector.detector import DEFAULTS, FrameCloud, Rejected, Tracker, detect, voxel_down  # noqa: E402
 
 DATA = Path(__file__).resolve().parents[2] / "OneDrive_2_10-28-2026"
 BAG = DATA / "rosbag2_2026_10_27-16_35_10"
@@ -533,6 +533,16 @@ def test_rviz_is_light(name="holes.rviz", things="holes"):
     assert len(view) == 1 and view[0]["Decay Time"] == 0 and view[0]["Topic"]["Durability Policy"] == "Transient Local"
 
 
+def test_downsample_matches_voxel_down(points):
+    """Tracker.downsample (cached voxel rows) gives exactly voxel_down(crop): the same points in the same order,
+    on a crop that grows 0.4 mm at a time and is cut at an arbitrary y (the surface fit samples by index)."""
+    tracker = Tracker(log=lambda *_: None)
+    points = points[np.argsort(points[:, 1], kind="stable")]
+    for end in np.arange(0.004, points[-1, 1], 0.0004):
+        crop = points[(points[:, 1] < end) & (points[:, 1] > end - 0.0437)]
+        assert np.array_equal(tracker.downsample(crop, crop[:, 1].max()), voxel_down(crop, tracker.p["voxel"])), end
+
+
 def test_launch_single_node():
     """The package's launch file starts its own node only (holes / rivets / both: laser_hhrp detectors.launch.py)."""
     root = Path(__file__).resolve().parents[1]
@@ -587,6 +597,7 @@ if __name__ == "__main__":
     test_writer_drains()
     test_empty_cloud_is_ignored()
     test_synthetic_plate()
+    test_downsample_matches_voxel_down(synthetic_plate())
     test_synthetic_incremental()
     test_reverse_scan()
     test_rejection_reported_once()
