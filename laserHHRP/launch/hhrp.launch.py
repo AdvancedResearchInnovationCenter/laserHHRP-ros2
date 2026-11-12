@@ -41,9 +41,9 @@ def generate_launch_description():
                               description="true: hardware sync (Nano D3 -> laser In1); false: software sync"),
         DeclareLaunchArgument("nano_port", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("holes", default_value="true",
-                              description="also run hole/rivet detection (hole_detector package)"),
+                              description="also run hole/rivet detection (detectors.launch.py)"),
         DeclareLaunchArgument("mode", default_value="",
-                              description="holes | rivets | both (empty: detector_mode in hole_detector/config/params.yaml)"),
+                              description="holes | rivets | both (empty: detection.mode in params_file)"),
         DeclareLaunchArgument("holes_out_dir",
                               default_value="~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out",
                               description="where detection saves its scan folders"),
@@ -66,12 +66,13 @@ def generate_launch_description():
         # layers 4, 5: point cloud, inspection
         node("point_cloud_node"),
         node("inspection_node"),
-        # hole / rivet detection: separate package, own parameters (hole_detector/config/params.yaml)
+        # hole / rivet detection: packages hole_detector, rivet_detector (own parameters); mode from params_file
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(
-                [FindPackageShare("hole_detector"), "launch", "hole_detector.launch.py"])),
+                [FindPackageShare("laser_hhrp"), "launch", "detectors.launch.py"])),
             launch_arguments={"mode": LaunchConfiguration("mode"),
-                              "out_dir": LaunchConfiguration("holes_out_dir")}.items(),
+                              "out_dir": LaunchConfiguration("holes_out_dir"),
+                              "params_file": LaunchConfiguration("params_file")}.items(),
             condition=IfCondition(LaunchConfiguration("holes"))),
         # layer 6: storage
         node("recorder_node"),

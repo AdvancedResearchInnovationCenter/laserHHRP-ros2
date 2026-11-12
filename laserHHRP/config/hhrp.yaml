@@ -76,3 +76,9 @@
 
     # ---- simulation (simulator_node) ----
     sim.speed_mps: 0.02              # simulated rolling speed
+
+# Hole / rivet detection: read by launch/detectors.launch.py only (no node is named detection).
+# mode:= on the launch line overrides it. Each detector's own parameters: <package>/config/params.yaml.
+detection:
+  ros__parameters:
+    mode: holes                      # holes | rivets | both
