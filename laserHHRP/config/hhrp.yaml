@@ -24,8 +24,23 @@
 
     # ---- laser ----
     laser.interface: "169.254.138.108"  # scanner IP; "" = the first one found
-    laser.resolution: 1280           # points per profile
-    laser.exposure_time_us: 100      # multiples of 10 us
+    # Scanner setup file (.sc1 saved by the Windows Configuration Tools), loaded at every connect.
+    # The settings below then go on top of it: 0 = keep the file's value; the IO/trigger/idle
+    # settings are always set, they are what the Nano sync needs. "" = no file.
+    laser.config_file: "test.sc1"    # relative = this package's config/; "~/..." or absolute also work
+    laser.config_ignore_calibration: true  # true = keep the scanner's own calibration
+    laser.resolution: 0              # points per profile; 0 = the file's (test.sc1: 640)
+    laser.exposure_time_us: 0        # multiples of 10 us; 0 = the file's (test.sc1: 3000)
+    laser.exposure_automatic: false  # with exposure_time_us > 0: scanner's automatic exposure
+    laser.idle_time_us: 0            # pause between profiles, multiples of 10 us; 0 = automatic:
+                                     # software sync 1e6/sync.software_rate_hz - exposure; hardware sync 900
+    laser.inputs_24v: false          # input voltage level: false = TTL 5 V (the Nano), true = 24 V
+    laser.input_pulldown: true       # pull-down on the inputs (an unplugged cable never triggers)
+    laser.digital_in_mode: 2         # I/O register bits 4..7: 2 = In1 is the trigger input only
+    laser.trigger_mode: 0            # hardware sync only; trigger register bits 16..19: 0 = edge
+    laser.trigger_input_digital: true   # hardware sync only: true = trigger from digital input In1
+    laser.trigger_polarity_high: true   # hardware sync only: true = rising edge triggers
+    laser.queue_size: 256            # profiles buffered between the SDK thread and ROS (lost if full)
     laser.max_profile_rate_hz: 120.0 # hardware sync never triggers faster; max speed = rate * pitch
     laser.live_view_every: 10        # one live-view profile (laser/profile) per this many
 

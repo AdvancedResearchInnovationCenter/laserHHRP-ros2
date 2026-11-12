@@ -15,11 +15,20 @@ namespace laser_hhrp {
 
 struct ScanControlSettings {
   std::string interface;           // scanner IP / name as listed by the SDK; "" = first found
-  uint32_t resolution = 1280;      // points per profile (highest supported value <= this)
-  uint32_t exposure_time_us = 100;  // multiples of 10 us
-  uint32_t idle_time_us = 900;      // free running only: period = exposure + idle
-  bool external_trigger = false;    // true: one profile per rising edge on In1 (hardware sync)
+  std::string config_file;         // Configuration Tools .sc1 loaded first, the rest goes on top; "" = none
+  bool config_ignore_calibration = true;  // config_file: keep the scanner's own calibration
+  uint32_t resolution = 0;         // points per profile (highest supported <= this); 0 = keep the sensor's
+  uint32_t exposure_time_us = 0;   // multiples of 10 us; 0 = keep the sensor's (and its automatic bit)
+  bool exposure_automatic = false;  // with exposure_time_us > 0: scanner's automatic exposure
+  double software_rate_hz = 0;     // free running: idle = 1/rate - exposure (when idle_time_us is 0)
+  uint32_t idle_time_us = 0;       // fixed idle; 0 = automatic (software sync: from the rate; hardware: 900)
+  bool external_trigger = false;    // true: one profile per trigger on In1 (hardware sync)
   bool inputs_24v = false;          // input level: false = TTL 5 V (the Nano)
+  bool input_pulldown = true;       // pull-down on the inputs: an unplugged cable never triggers
+  uint32_t digital_in_mode = 2;     // IO register, bits 4..7: 2 = In1 is the trigger input only
+  uint32_t trigger_mode = 0;        // trigger register, bits 16..19: 0 = edge
+  bool trigger_input_digital = true;   // trigger source: digital input In1
+  bool trigger_polarity_high = true;   // trigger on the rising edge
   uint32_t queue_size = 256;        // profiles buffered between the SDK thread and read()
 };
 
@@ -40,7 +49,8 @@ class ScanControl {
   ScanControl(const ScanControl&) = delete;
   ScanControl& operator=(const ScanControl&) = delete;
 
-  bool connect(const ScanControlSettings& settings, std::string& error);
+  /// On success `message` describes the active setup (file, exposure, idle, resolution); else the error.
+  bool connect(const ScanControlSettings& settings, std::string& message);
   void disconnect();
   bool connected() const;
   /// Next profile (non-blocking). False if none waiting; `error` set if the scanner was lost.

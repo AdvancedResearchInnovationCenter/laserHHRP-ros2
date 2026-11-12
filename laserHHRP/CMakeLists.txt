@@ -13,6 +13,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 # ---- messages ----------------------------------------------------------------------------------
 file(GLOB MSG_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} msg/*.msg)
@@ -49,6 +50,8 @@ add_node(recorder_node)
 add_node(calibration_node)
 add_node(scan_controller_node)
 add_node(simulator_node)
+
+ament_target_dependencies(laser_driver_node ament_index_cpp)  # finds laser.config_file
 
 if(LLT_FOUND)
   target_compile_definitions(laser_driver_node PRIVATE LASER_HHRP_HAS_SDK=1)

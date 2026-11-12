@@ -17,8 +17,19 @@ Source: `src/laser_driver_node.cpp`, `src/scancontrol.cpp`, `include/laser_hhrp/
 | pub | `laser/profile` | `sensor_msgs/PointCloud2` | every `laser.live_view_every`-th profile, sensor-data QoS |
 | pub | `laser/status` | `laser_hhrp/LaserStatus` | 1 Hz: connected + last message |
 | param | `laser.interface` | `""` | scanner IP / SDK name; empty = first found |
-| param | `laser.resolution` | `1280` | highest supported value ≤ this is used |
-| param | `laser.exposure_time_us` | `100` | register in units of 10 µs |
+| param | `laser.config_file` | `""` (hhrp.yaml: `test.sc1`) | scanCONTROL Configuration Tools file loaded at every connect, before the settings below; relative = `share/laser_hhrp/config/`, `~/` = home; a missing file stops the node |
+| param | `laser.config_ignore_calibration` | `true` | keep the scanner's own calibration when loading the file |
+| param | `laser.resolution` | `0` | 0 = keep the sensor's (the file's); else the highest supported value ≤ this |
+| param | `laser.exposure_time_us` | `0` | 0 = keep the sensor's (the file's); else register in units of 10 µs |
+| param | `laser.exposure_automatic` | `false` | with `exposure_time_us` > 0: scanner's automatic exposure (refused in software sync) |
+| param | `laser.idle_time_us` | `0` | 0 = automatic (software sync: `1e6/rate − exposure`; hardware sync: 900) |
+| param | `laser.inputs_24v` | `false` | input level: false = TTL 5 V |
+| param | `laser.input_pulldown` | `true` | pull-down on the inputs |
+| param | `laser.digital_in_mode` | `2` | I/O register bits 4..7; 2 = In1 trigger input only |
+| param | `laser.trigger_mode` | `0` | trigger register bits 16..19 (hardware sync); 0 = edge |
+| param | `laser.trigger_input_digital` | `true` | hardware sync: trigger from digital input In1 |
+| param | `laser.trigger_polarity_high` | `true` | hardware sync: rising edge |
+| param | `laser.queue_size` | `256` | profiles buffered between the SDK thread and the node |
 | param | `sync.hardware_trigger` | `false` | true = external trigger on In1 |
 | param | `sync.software_rate_hz` | `120.0` | only declared when `sync.hardware_trigger` is false |
 | param | `laser.live_view_every` | `10` | live-view thinning |
@@ -28,9 +39,7 @@ Source: `src/laser_driver_node.cpp`, `src/scancontrol.cpp`, `include/laser_hhrp/
 ```
 startup:
     read parameters into ScanControlSettings
-    if software sync:
-        expected_hz = max(1, software_rate_hz)
-        idle_time_us = max(10, 1e6/expected_hz − exposure_time_us)     (period = exposure + idle)
+    if software sync: expected_hz = max(1, software_rate_hz)
     connect()
     timers: 1 ms -> poll(), 1 s -> publish_status()
 
@@ -38,13 +47,18 @@ connect():
     scanner_clock.reset()                      (a reconnected scanner may restart its clock)
     ScanControl::connect(settings):
         find interface (or first discovered) -> SetDeviceInterface -> Connect -> check type is 29xx
-        resolution = highest supported <= requested
+        transfer off; ImportLLTConfig(config_file, ignore_calibration = true)   (failure = connect failure)
+        resolution = the sensor's (0) or highest supported <= requested
+        exposure: kept (0) or set (value/10, automatic off); then read back
+        idle = laser.idle_time_us, or 0 = automatic: software sync max(10, 1e6/expected_hz − exposure)
+               (period = exposure + idle); hardware sync 900 µs (exposure + idle must fit the shortest trigger period)
         read-modify-write registers (only our bit fields change):
-            exposure (value/10, automatic off), idle (value/10),
-            IO: TTL 5 V (or 24 V), pull-down, In1 = trigger input
-            trigger: external -> ext-active | edge | digital input | rising;  internal -> clear ext-active
+            idle (value/10),
+            IO: TTL 5 V (or 24 V), pull-down, digital-in mode (In1 = trigger input)
+            trigger: external -> ext-active | mode | input | polarity;  internal -> clear ext-active
         partial profile: x and z of stripe 0 (8 bytes / point)
         register profile + control-lost callbacks, start transfer
+    success: log + laser/status "connected; setup test.sc1 loaded; exposure … us, idle … us, resolution …"
     on failure: keep the message, warn (throttled 10 s)
 
 SDK thread, on_profile(data):           stamped with arrival = system time first

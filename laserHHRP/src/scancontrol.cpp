@@ -22,6 +22,7 @@ bool ScanControl::read(LaserProfile&, std::string&) { return false; }
 
 #include <llt.h>
 
+#include <algorithm>
 #include <chrono>
 #include <deque>
 #include <mutex>
@@ -30,14 +31,12 @@ namespace laser_hhrp {
 
 namespace {
 // Register bits (scanCONTROL SDK LLTDataTypes.h, 29xx manual).
-constexpr uint32_t kTrigModeEdge = 0u << 16;
 constexpr uint32_t kTrigInputDigIn = 1u << 21;
 constexpr uint32_t kTrigPolarityHigh = 1u << 24;
 constexpr uint32_t kTrigExtActive = 1u << 25;
 constexpr uint32_t kTriggerMask = kTrigExtActive | kTrigPolarityHigh | kTrigInputDigIn | (0xFu << 16);
 constexpr uint32_t kIoLevel24V = 1u << 11;
 constexpr uint32_t kIoPullDown = 1u << 8;          // an unplugged cable never triggers
-constexpr uint32_t kIoDigInTriggerOnly = 2u << 4;  // In1 = trigger input
 constexpr uint32_t kIoMask = kIoLevel24V | kIoPullDown | (0xFu << 4) | 0xFu;
 constexpr uint32_t kExposureAutomatic = 1u << 24;
 constexpr uint32_t kTimeMask = 0x00FFFFFFu;
@@ -113,11 +112,11 @@ ScanControl::~ScanControl() { disconnect(); }
 bool ScanControl::connected() const { return impl_->llt != nullptr; }
 void ScanControl::disconnect() { impl_->close(); }
 
-bool ScanControl::connect(const ScanControlSettings& s, std::string& error) {
+bool ScanControl::connect(const ScanControlSettings& s, std::string& message) {
   Impl& d = *impl_;
   d.close();
-  auto fail = [&](const char* what) {
-    error = what;
+  auto fail = [&](const std::string& what) {
+    message = what;
     d.close();
     return false;
   };
@@ -138,29 +137,60 @@ bool ScanControl::connect(const ScanControlSettings& s, std::string& error) {
       !(d.type >= scanCONTROL29xx_25 && d.type <= scanCONTROL29xx_xxx))
     return fail("not a scanCONTROL 29xx");
 
-  // 2. Highest supported resolution not above the requested one.
-  std::vector<guint32> resolutions(16, 0);
-  const gint32 nres = d.llt->GetResolutions(resolutions.data(), 16);
+  // 2. The Configuration Tools file first (the user's setup); steps 3-4 go on top of it.
+  // A run that died may have left the transfer on; when it is off this returns an error, ignored.
+  d.llt->TransferProfiles(NORMAL_TRANSFER, false);
+  const std::string file = s.config_file.substr(s.config_file.find_last_of('/') + 1);
+  if (!s.config_file.empty()) {
+    const gint32 rc = d.llt->ImportLLTConfig(s.config_file.c_str(), s.config_ignore_calibration);
+    if (rc < GENERAL_FUNCTION_OK) return fail("loading " + s.config_file + " failed (SDK " + std::to_string(rc) + ")");
+  }
+
+  // 3. Resolution: the sensor's (file's), or the highest supported one not above the requested one.
   d.resolution = 0;
-  for (gint32 i = 0; i < nres; ++i)
-    if (resolutions[i] <= s.resolution && resolutions[i] > d.resolution) d.resolution = resolutions[i];
-  if (d.resolution == 0 && nres > 0) d.resolution = resolutions[nres - 1];
+  if (s.resolution == 0) {
+    d.llt->GetResolution(&d.resolution);
+  } else {
+    std::vector<guint32> resolutions(16, 0);
+    const gint32 nres = d.llt->GetResolutions(resolutions.data(), 16);
+    for (gint32 i = 0; i < nres; ++i)
+      if (resolutions[i] <= s.resolution && resolutions[i] > d.resolution) d.resolution = resolutions[i];
+    if (d.resolution == 0 && nres > 0) d.resolution = resolutions[nres - 1];
+  }
   if (d.resolution == 0) return fail("no resolution");
 
-  // 3. Exposure, idle time, IO (In1 as trigger input) and trigger mode.
+  // 4. Exposure (unless kept), idle time, IO (In1 as trigger input) and trigger mode.
   auto update = [&d](guint32 address, uint32_t mask, uint32_t value) {
     guint32 current = 0;
     if (d.llt->GetFeature(address, &current) < GENERAL_FUNCTION_OK) return false;
     return d.llt->SetFeature(address, merge(current, mask, value)) >= GENERAL_FUNCTION_OK;
   };
-  const uint32_t io = (s.inputs_24v ? kIoLevel24V : 0u) | kIoPullDown | kIoDigInTriggerOnly;
+  if (s.exposure_time_us > 0 &&
+      !update(FEATURE_FUNCTION_EXPOSURE_TIME, kTimeMask | kExposureAutomatic,
+              s.exposure_time_us / 10 | (s.exposure_automatic ? kExposureAutomatic : 0u)))
+    return fail("configuration failed (exposure)");
+  guint32 exposure = 0;
+  if (d.llt->GetFeature(FEATURE_FUNCTION_EXPOSURE_TIME, &exposure) < GENERAL_FUNCTION_OK)
+    return fail("configuration failed (reading exposure)");
+  const uint32_t exposure_us = (exposure & kTimeMask) * 10;
+  if (s.software_rate_hz > 0 && (exposure & kExposureAutomatic))
+    return fail("automatic exposure is on: software sync needs a fixed exposure (set laser.exposure_time_us)");
+  // Free running: period = exposure + idle. Hardware sync: exposure + idle must fit the shortest
+  // trigger period (a file's long idle would make the scanner skip pulses).
+  const uint32_t idle_us = s.idle_time_us > 0 ? s.idle_time_us
+      : s.software_rate_hz > 0 ? static_cast<uint32_t>(std::max(10.0, 1e6 / s.software_rate_hz - exposure_us))
+      : 900u;
+  const uint32_t io = (s.inputs_24v ? kIoLevel24V : 0u) | (s.input_pulldown ? kIoPullDown : 0u) |
+                      ((s.digital_in_mode & 0xFu) << 4);
   const uint32_t trigger_value =
-      s.external_trigger ? (kTrigExtActive | kTrigModeEdge | kTrigInputDigIn | kTrigPolarityHigh) : 0u;
+      s.external_trigger ? (kTrigExtActive | ((s.trigger_mode & 0xFu) << 16) |
+                            (s.trigger_input_digital ? kTrigInputDigIn : 0u) |
+                            (s.trigger_polarity_high ? kTrigPolarityHigh : 0u))
+                         : 0u;
   const uint32_t trigger_mask = s.external_trigger ? kTriggerMask : kTrigExtActive;
   if (d.llt->SetResolution(d.resolution) < GENERAL_FUNCTION_OK ||
       d.llt->SetProfileConfig(PARTIAL_PROFILE) < GENERAL_FUNCTION_OK ||
-      !update(FEATURE_FUNCTION_EXPOSURE_TIME, kTimeMask | kExposureAutomatic, s.exposure_time_us / 10) ||
-      !update(FEATURE_FUNCTION_IDLE_TIME, kTimeMask, s.idle_time_us / 10) ||
+      !update(FEATURE_FUNCTION_IDLE_TIME, kTimeMask, idle_us / 10) ||
       !update(FEATURE_FUNCTION_RS422_INTERFACE_FUNCTION, kIoMask, io) ||
       !update(FEATURE_FUNCTION_TRIGGER, trigger_mask, trigger_value))
     return fail("configuration failed");
@@ -171,7 +201,7 @@ bool ScanControl::connect(const ScanControlSettings& s, std::string& error) {
   if (d.llt->SetPartialProfile(&d.partial) < GENERAL_FUNCTION_OK)
     return fail("partial profile setup failed");
 
-  // 4. Callbacks and transfer.
+  // 5. Callbacks and transfer.
   d.x.assign(d.resolution, 0.0);
   d.z.assign(d.resolution, 0.0);
   {
@@ -190,6 +220,9 @@ bool ScanControl::connect(const ScanControlSettings& s, std::string& error) {
     return fail("callback registration failed");
   if (d.llt->TransferProfiles(NORMAL_TRANSFER, true) < GENERAL_FUNCTION_OK)
     return fail("transfer start failed");
+  message = "setup " + (file.empty() ? std::string("sensor's own (no .sc1)") : file + " loaded") +
+          "; exposure " + std::to_string(exposure_us) + " us, idle " + std::to_string(idle_us / 10 * 10) +
+          " us, resolution " + std::to_string(d.resolution);
   return true;
 }
 

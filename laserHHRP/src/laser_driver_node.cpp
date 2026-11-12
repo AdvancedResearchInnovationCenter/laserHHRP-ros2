@@ -7,7 +7,13 @@
 // Trigger: sync.hardware_trigger true = one profile per Nano pulse on In1; false = free running
 // at sync.software_rate_hz. A missing scanner is retried every 2 s.
 #include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <filesystem>
+#include <fstream>
 #include <rclcpp/rclcpp.hpp>
+#include <stdexcept>
 
 #include "laser_hhrp/msg/laser_status.hpp"
 #include "laser_hhrp/msg/raw_profile.hpp"
@@ -22,15 +28,24 @@ class LaserDriverNode : public rclcpp::Node {
   // ---- setup: scanner settings from the parameters ----
   LaserDriverNode() : Node("laser_driver") {
     settings_.interface = declare_parameter("laser.interface", "");
-    settings_.resolution = declare_parameter("laser.resolution", 1280);
-    settings_.exposure_time_us = declare_parameter("laser.exposure_time_us", 100);
+    settings_.config_file = config_path(declare_parameter("laser.config_file", ""));
+    settings_.config_ignore_calibration = declare_parameter("laser.config_ignore_calibration", true);
+    settings_.resolution = unsigned_param("laser.resolution", 0);
+    settings_.exposure_time_us = unsigned_param("laser.exposure_time_us", 0);
+    settings_.exposure_automatic = declare_parameter("laser.exposure_automatic", false);
+    settings_.idle_time_us = unsigned_param("laser.idle_time_us", 0);
+    settings_.inputs_24v = declare_parameter("laser.inputs_24v", false);
+    settings_.input_pulldown = declare_parameter("laser.input_pulldown", true);
+    settings_.digital_in_mode = unsigned_param("laser.digital_in_mode", 2);
+    settings_.trigger_mode = unsigned_param("laser.trigger_mode", 0);
+    settings_.trigger_input_digital = declare_parameter("laser.trigger_input_digital", true);
+    settings_.trigger_polarity_high = declare_parameter("laser.trigger_polarity_high", true);
+    settings_.queue_size = unsigned_param("laser.queue_size", 256);
     settings_.external_trigger = declare_parameter("sync.hardware_trigger", false);
-    // Software sync: the scanner runs free. Its period is exposure + idle, so
-    // idle = 1/rate - exposure (at least 10 us).
-    if (!settings_.external_trigger) {  // free running: period = exposure + idle
+    // Software sync: the scanner runs free; ScanControl sets idle = 1/rate - exposure.
+    if (!settings_.external_trigger) {
       expected_hz_ = std::max(1.0, declare_parameter("sync.software_rate_hz", 120.0));
-      settings_.idle_time_us = static_cast<uint32_t>(
-          std::max(10.0, 1e6 / expected_hz_ - settings_.exposure_time_us));
+      settings_.software_rate_hz = expected_hz_;
     }
     live_view_every_ = std::max<int64_t>(1, declare_parameter("laser.live_view_every", 10));
 
@@ -43,13 +58,35 @@ class LaserDriverNode : public rclcpp::Node {
   }
 
  private:
+  // A negative value would wrap into a wrong scanner register value: refuse it.
+  uint32_t unsigned_param(const std::string& name, int64_t default_value) {
+    const int64_t v = declare_parameter(name, default_value);
+    if (v < 0 || v > UINT32_MAX) throw std::invalid_argument(name + " must be 0 or more: " + std::to_string(v));
+    return static_cast<uint32_t>(v);
+  }
+
+  // laser.config_file: "" = none; "~/..." = home; relative = this package's config/ folder.
+  // A wrong name stops the node: scanning with the sensor's old setup would go unnoticed.
+  std::string config_path(const std::string& name) {
+    if (name.empty()) return name;
+    const char* home = std::getenv("HOME");
+    std::filesystem::path path(name.rfind("~/", 0) == 0 && home ? std::string(home) + name.substr(1) : name);
+    if (path.is_relative())
+      path = std::filesystem::path(ament_index_cpp::get_package_share_directory("laser_hhrp")) / "config" / path;
+    if (!std::filesystem::is_regular_file(path) || !std::ifstream(path)) {
+      RCLCPP_FATAL(get_logger(), "laser.config_file: cannot read %s", path.c_str());
+      throw std::runtime_error("laser.config_file not found: " + path.string());
+    }
+    return path.string();
+  }
+
   // ---- connect (at start, then every 2 s while disconnected) ----
   void connect() {
     clock_.reset();  // a reconnected scanner may have restarted its clock
     if (scanner_.connect(settings_, message_)) {
-      message_ = "connected";
-      RCLCPP_INFO(get_logger(), "scanner connected (%s trigger)",
-                  settings_.external_trigger ? "external In1" : "internal");
+      RCLCPP_INFO(get_logger(), "scanner connected (%s trigger); %s",
+                  settings_.external_trigger ? "external In1" : "internal", message_.c_str());
+      message_ = "connected; " + message_;
     } else {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "scanner: %s", message_.c_str());
     }
