@@ -1,0 +1,55 @@
+# Lengths in mm (max_normal_angle in degrees; the rim limits below are unitless).
+hole_detector:
+  ros__parameters:
+    input_type: frame               # frame: build the cloud from /scan/frame profiles; cloud: a cumulative PointCloud2
+    input_topic: /scan/frame        # /scan/cloud_view with input_type: cloud
+    out_dir: ~/hole_detector_out   # one scan_<time>/ folder per scan: summary.csv + hole PCDs
+    viz_surface: true     # publish /holes/surface (decided strip coloured by depth); false saves CPU/network on the Pi
+    voxel: 0.3            # downsample grid
+    surface_tol: 0.5      # top-surface band; the top diameter is measured at this depth
+    grid: 0.3             # pixel size of the 2D surface image
+    min_diam: 2.0
+    max_diam: 30.0
+    max_depth: 8.5        # deepest point counted (hole test, cone test, boundary cut); deeper = floor seen through
+    ring: 5.0             # surface ring the hole test compares against (changes detection)
+    boundary_margin: 5.0  # saved boundary cut-out = top rim + this (output only; complete up to ring + guard = 8 mm, except at the scan start)
+    guard: 3.0            # gaps this close to a crop end wait for the next cloud
+    dedupe_tol: 2.0
+    max_normal_angle: 18.0
+    # Which holes to report: any | countersunk | plain (countersunk = a cone wall inside the rim).
+    hole_type: any
+    min_hole_depth: 1.0   # a gap whose middle is neither empty nor this deep is a dent
+    # Unitless acceptance limits for the top rim:
+    min_rim_coverage: 0.6   # share of the scanned rim sectors that must hold rim points
+    max_roundness: 0.08     # rim-fit RMS / radius
+    min_scanned_share: 0.6  # share of the rim outside unscanned bands; below 1 the hole is flagged partial
+
+# Which detector `hole_detector.launch.py` starts: holes (the node above) | rivets (the node below).
+# Read by the launch file only (no node is named detector_mode); `mode:=` on the launch line overrides it.
+detector_mode:
+  ros__parameters:
+    mode: holes
+
+# Rivet heads (hole_detector/rivets/): round heads standing proud of the skin. Lengths in mm.
+rivet_detector:
+  ros__parameters:
+    input_type: frame
+    input_topic: /scan/frame
+    out_dir: ~/hole_detector_out   # one rivet_scan_<time>/ folder per scan: summary.csv + rivet PCDs
+    viz_surface: true
+    voxel: 0.3
+    surface_tol: 0.5      # skin band for the crop's surface fit
+    grid: 0.3             # pixel size of the height image the candidates are found on
+    rivet_diam: 9.0       # nominal head diameter
+    diam_tol: 2.0         # heads of rivet_diam +- this are rivets
+    min_height: 0.04      # a head stands at least this far proud of the skin ring around it
+    ring: 2.0             # skin ring outside the head (skin level; must be in the crop)
+    max_depth: 8.5        # boundary cut: deeper points (floor seen through a nearby hole) are left out
+    boundary_margin: 5.0  # saved boundary cut-out = head edge + this (output only)
+    guard: 3.0            # heads this close to a crop end wait for the next cloud
+    dedupe_tol: 2.0
+    max_normal_angle: 18.0
+    # Unitless acceptance limits for the head edge:
+    min_rim_coverage: 0.6   # share of the scanned edge sectors that must hold an edge point
+    max_roundness: 0.08     # edge-fit RMS / radius
+    min_scanned_share: 0.6  # share of the edge outside unscanned bands; below 1 the rivet is flagged partial

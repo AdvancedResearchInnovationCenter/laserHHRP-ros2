@@ -1,0 +1,123 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: laser
+    Background Color: 30; 30; 36
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.01
+      Plane Cell Count: 40
+      Reference Frame: laser
+    - Class: rviz_default_plugins/PointCloud2
+      Name: surface (depth below fit, -1..+1 mm)
+      Enabled: true
+      Topic:
+        Value: /holes/surface
+        Depth: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: deviation_mm
+      Use rainbow: true
+      Invert Rainbow: false
+      Autocompute Intensity Bounds: false
+      Min Intensity: -1
+      Max Intensity: 1
+      Decay Time: 600
+    - Class: rviz_default_plugins/MarkerArray
+      Name: scan progress (decided / laser lines, status, ruler)
+      Enabled: true
+      Topic:
+        Value: /holes/progress
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+    - Class: rviz_default_plugins/PointCloud2
+      Name: scan (input, lossy on the Pi)
+      Enabled: false
+      Topic:
+        Value: /scan/cloud_view
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 1
+      Color Transformer: FlatColor
+      Color: 120; 120; 120
+      Alpha: 0.4
+    - Class: rviz_default_plugins/MarkerArray
+      Name: holes (green complete, amber partial, red rejected, red slabs = unscanned)
+      Enabled: true
+      Topic:
+        Value: /holes/markers
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+    - Class: rviz_default_plugins/PointCloud2
+      Name: fitted circles (same rings as the markers)
+      Enabled: false
+      Topic:
+        Value: /holes/circles
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Style: Points
+      Size (Pixels): 4
+      Color Transformer: Intensity
+      Channel Name: hole_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+    - Class: rviz_default_plugins/PointCloud2
+      Name: boundary (hole + 5 mm ring)
+      Enabled: true
+      Topic:
+        Value: /holes/boundary
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: Intensity
+      Channel Name: hole_id
+      Use rainbow: true
+      Autocompute Intensity Bounds: true
+      Decay Time: 100000
+    - Class: rviz_default_plugins/PoseArray
+      Name: hole poses
+      Enabled: true
+      Shape: Axes
+      Axes Length: 0.008
+      Axes Radius: 0.0006
+      Topic:
+        Value: /holes/poses
+        Depth: 5
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 0.45
+      Focal Point:
+        X: 0
+        Y: 0.15
+        Z: 0.066
+      Pitch: -1.2
+      Yaw: 3.14
+      Target Frame: <Fixed Frame>
