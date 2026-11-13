@@ -6,18 +6,24 @@
     ros2 launch laser_hhrp hhrp.launch.py scan_switch:=false      # no GPIO header (not on the Pi)
     ros2 launch laser_hhrp hhrp.launch.py ui:=false               # without the operator UI
                                                                   # (over SSH: RViz needs a display)
-    ros2 launch laser_hhrp hhrp.launch.py mode:=rivets            # rivet heads instead of holes
-    ros2 launch laser_hhrp hhrp.launch.py mode:=both              # holes and rivets (a panel with both)
+    ros2 launch laser_hhrp hhrp.launch.py mode:=holes             # holes only (default both, hhrp.yaml)
+    ros2 launch laser_hhrp hhrp.launch.py mode:=rivets            # rivet heads only
+    ros2 launch laser_hhrp hhrp.launch.py network:=true           # let other hosts see the topics (RViz on a PC)
     ros2 launch laser_hhrp hhrp.launch.py holes:=false            # without hole/rivet detection
 
 Parameters: config/hhrp.yaml (or params_file:=...). The UI alone (e.g. on a PC): ui.launch.py.
+
+ROS discovery is LOCALHOST by default: other machines' nodes on the Wi-Fi pulled the laser data and
+stopped scans. network:=true sets SUBNET; then on the PC (same ROS_DOMAIN_ID):
+    ros2 daemon stop; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET ros2 launch laser_hhrp ui.launch.py
+Run `ros2 daemon stop` in a shell after changing the range, or ros2 topic etc. keep the old one.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -53,6 +59,11 @@ def generate_launch_description():
                               description="also start RViz with the operator panel (needs a display)"),
         DeclareLaunchArgument("params_file", default_value=PathJoinSubstitution(
             [FindPackageShare("laser_hhrp"), "config", "hhrp.yaml"])),
+        DeclareLaunchArgument("network", default_value="false",
+                              description="true: ROS discovery on the subnet (RViz on a PC); false: this host only"),
+        # before every node: all of them inherit it
+        SetEnvironmentVariable("ROS_AUTOMATIC_DISCOVERY_RANGE", PythonExpression(
+            ["'SUBNET' if '", LaunchConfiguration("network"), "'.lower() == 'true' else 'LOCALHOST'"])),
 
         # layer 1: hardware interface (or the simulator in their place)
         node("nano_driver_node", condition=UnlessCondition(simulate)),

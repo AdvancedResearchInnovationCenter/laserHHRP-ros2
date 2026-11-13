@@ -27,7 +27,8 @@ ros2 launch laser_hhrp hhrp.launch.py                          # hardware, softw
 ros2 launch laser_hhrp hhrp.launch.py hardware_trigger:=true   # hardware sync (Nano D3 -> laser In1)
 ros2 launch laser_hhrp hhrp.launch.py simulate:=true           # no hardware at all
 ros2 launch laser_hhrp hhrp.launch.py ui:=false                # without RViz (Pi without a screen)
-ros2 launch laser_hhrp hhrp.launch.py mode:=rivets             # rivet heads instead of holes (hole_detector package)
+ros2 launch laser_hhrp hhrp.launch.py mode:=holes              # holes only (default: both, detection.mode in hhrp.yaml)
+ros2 launch laser_hhrp hhrp.launch.py network:=true            # topics visible to other hosts (RViz on a PC)
 ros2 launch laser_hhrp hhrp.launch.py holes:=false             # without hole/rivet detection
 ros2 launch laser_hhrp ui.launch.py                            # RViz with the operator panel alone (e.g. on a PC)
 # which RViz displays start shown: config/rviz_displays.yaml (or ui.launch.py displays_file:=...)
@@ -35,9 +36,15 @@ ros2 launch laser_hhrp ui.launch.py                            # RViz with the o
 
 Launch arguments: `ui` (default `true`: also starts RViz with the operator panel), `simulate`,
 `hardware_trigger`, `nano_port` (default `/dev/ttyUSB0`), `params_file` (default `config/hhrp.yaml`),
-`holes` (default `true`: also starts hole/rivet detection, see `../hole_detector/`), `mode` (`holes` or
-`rivets`; default from `hole_detector/config/params.yaml`), `holes_out_dir` (default
-`~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out`).
+`holes` (default `true`: also starts hole/rivet detection, see `../hole_detector/`, `../rivet_detector/`),
+`mode` (`holes`, `rivets` or `both`; default `detection.mode` in `config/hhrp.yaml`, `both`), `holes_out_dir`
+(default `~/aric_ws/src/laserHHRP-ros2/hole_detector/hole_detector_out`), `network` (default `false`).
+
+`network`: ROS discovery stays on this host (`ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`), because other
+machines' nodes on the Wi-Fi pulled the laser data and stopped scans. For RViz on a PC: on the Pi
+`hhrp.launch.py network:=true`; on the PC, same `ROS_DOMAIN_ID`,
+`ros2 daemon stop; ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET ros2 launch laser_hhrp ui.launch.py`.
+After changing the range in a shell, run `ros2 daemon stop` once.
 
 Operator actions (the panel buttons call the same services):
 

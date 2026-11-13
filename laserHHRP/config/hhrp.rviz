@@ -111,18 +111,18 @@ Visualization Manager:
       Name: Boundary
       Enabled: true
       Topic:
-        Value: /holes/boundary
+        Value: /holes/boundary_view
         Depth: 5
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
       Style: Points
       Size (Pixels): 2
       Color Transformer: Intensity
       Channel Name: hole_id
       Use rainbow: true
       Autocompute Intensity Bounds: true
-      Decay Time: 100000
+      Decay Time: 0
       Value: true
     - Class: rviz_default_plugins/PoseArray
       Name: Hole axes
@@ -197,18 +197,18 @@ Visualization Manager:
       Name: Rivet boundary
       Enabled: true
       Topic:
-        Value: /rivets/boundary
+        Value: /rivets/boundary_view
         Depth: 5
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Durability Policy: Volatile
+        Durability Policy: Transient Local
       Style: Points
       Size (Pixels): 2
       Color Transformer: Intensity
       Channel Name: rivet_id
       Use rainbow: true
       Autocompute Intensity Bounds: true
-      Decay Time: 100000
+      Decay Time: 0
       Value: true
     - Class: rviz_default_plugins/PoseArray
       Name: Rivet axes

@@ -4,20 +4,20 @@
 # Another file: ros2 launch laser_hhrp ui.launch.py displays_file:=/path/to/file.yaml
 displays:
   Live profile: true      # /laser/profile: the current laser line
-  3D scan: true           # /scan/cloud_view: the scan input (lossy on the Pi)
-  Hole surface: true      # /holes/surface: scanned surface coloured by depth below the fit (-1..+1 mm)
+  3D scan: false          # /scan/cloud_view: the scan input (lossy, heavy on the Pi)
+  Hole surface: false     # /holes/surface (needs viz_surface: true): scanned surface coloured by depth below the fit (-1..+1 mm)
   Scan progress: true     # /holes/progress: decided line, laser line, status text, ruler
   Holes: true             # /holes/markers: rings, centres, labels, rejected gaps, unscanned bands, distances
   Fitted circles: false   # /holes/circles: the same rings as points
-  Boundary: true          # /holes/boundary: the raw cut-out saved per hole (width: boundary_margin in
-                          # hole_detector/config/params.yaml)
+  Boundary: true          # /holes/boundary_view: every hole's cut-out at 0.3 mm (raw ones: /holes/boundary
+                          # and the PCDs; width: boundary_margin in hole_detector/config/params.yaml)
   Hole axes: true         # /holes/poses: hole axis (surface normal) at each centre
-  # Rivet mode (mode:=rivets): the same layers under /rivets/*
-  Rivet surface: true     # /rivets/surface: skin coloured by height (-0.3..+0.3 mm)
+  # Rivets (mode both or rivets): the same layers under /rivets/*
+  Rivet surface: false    # /rivets/surface (needs viz_surface: true): skin coloured by height (-0.3..+0.3 mm)
   Rivet progress: true    # /rivets/progress
   Rivets: true            # /rivets/markers: head rings, centres, labels, rejected candidates, bands, distances
   Rivet circles: false    # /rivets/circles
-  Rivet boundary: true    # /rivets/boundary: raw cut-out saved per rivet
+  Rivet boundary: true    # /rivets/boundary_view: every rivet's cut-out at 0.3 mm
   Rivet axes: true        # /rivets/poses
 layers:                   # marker namespaces inside Holes / Scan progress and Rivets / Rivet progress
   top: true               # rim ring (green complete, amber partial)

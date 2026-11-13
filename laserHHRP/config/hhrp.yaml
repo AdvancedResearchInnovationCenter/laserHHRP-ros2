@@ -81,4 +81,4 @@
 # mode:= on the launch line overrides it. Each detector's own parameters: <package>/config/params.yaml.
 detection:
   ros__parameters:
-    mode: holes                      # holes | rivets | both
+    mode: both                       # holes | rivets | both
