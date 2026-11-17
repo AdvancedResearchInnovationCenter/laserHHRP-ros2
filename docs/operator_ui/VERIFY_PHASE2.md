@@ -1,5 +1,8 @@
 # Verifying Phase 2 yourself
 
+> **Superseded by Phase 3** ([VERIFY_PHASE3.md](VERIFY_PHASE3.md)): live scans are now recorded, not previewed,
+> and `phase2_ros_check` was replaced by `phase3_ros_check`, which covers the same supervisor checks.
+
 Phase 2 = live ROS bridge (read-only) + one supervised detector per inspection, with live detections as a
 **preview** (shown, never recorded or acceptable) until Phase 3 adds scan identity.
 

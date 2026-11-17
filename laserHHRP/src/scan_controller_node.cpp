@@ -7,6 +7,8 @@
 //             calibration/status, odometry/slipping
 // Publishes   nano/command (to the Nano), scan/status (5 Hz and on every change)
 #include <cmath>
+#include <cstdio>
+#include <random>
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
@@ -19,6 +21,7 @@
 #include "laser_hhrp/msg/motion.hpp"
 #include "laser_hhrp/msg/nano_command.hpp"
 #include "laser_hhrp/msg/nano_status.hpp"
+#include "laser_hhrp/msg/scan_session_state.hpp"
 #include "laser_hhrp/msg/scan_status.hpp"
 #include "laser_hhrp/msg/storage_status.hpp"
 #include "laser_hhrp/msg/sync_stats.hpp"
@@ -26,6 +29,7 @@
 namespace laser_hhrp {
 
 using Status = msg::ScanStatus;
+using Session = msg::ScanSessionState;
 using Command = msg::NanoCommand;
 using Calibration = msg::CalibrationStatus;
 using Trigger = std_srvs::srv::Trigger;
@@ -47,6 +51,9 @@ class ScanControllerNode : public rclcpp::Node {
 
     command_pub_ = create_publisher<Command>("nano/command", 10);
     status_pub_ = create_publisher<Status>("scan/status", 10);
+    // Scan identity for the operator UI: reliable, and late joiners get the recent transitions.
+    session_pub_ = create_publisher<Session>("scan/session_state", rclcpp::QoS(50).reliable().transient_local());
+    controller_id_ = make_uuid();
     nano_sub_ = create_subscription<msg::NanoStatus>("nano/status", 10, [this](const msg::NanoStatus& m) {
       nano_ = m;
       nano_time_ = now();
@@ -78,6 +85,7 @@ class ScanControllerNode : public rclcpp::Node {
 
     monitor_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { monitor(); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(200), [this] { publish_status(); });
+    session_timer_ = create_wall_timer(std::chrono::seconds(1), [this] { publish_session(false); });
   }
 
  private:
@@ -106,7 +114,8 @@ class ScanControllerNode : public rclcpp::Node {
     send(Command::START);
     state_ = Status::SCANNING;
     stalled_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
-    publish_status();
+    scan_id_ = make_uuid();               // a new scan's identity, only on a successful start
+    transition(publish_status());
     message = "scanning";
     RCLCPP_INFO(get_logger(), "scan started, max speed %.1f mm/s", max_speed_mps() * 1e3);
     return true;
@@ -120,7 +129,7 @@ class ScanControllerNode : public rclcpp::Node {
     }
     send(Command::STOP);
     state_ = final_state;
-    publish_status();
+    transition(publish_status());
     message = "stopped: " + std::to_string(stats_.frames) + " frames in " + storage_.session_dir;
     RCLCPP_INFO(get_logger(), "scan stopped: %u frames, %u missing profiles", stats_.frames, stats_.missing_profiles);
     return true;
@@ -139,7 +148,7 @@ class ScanControllerNode : public rclcpp::Node {
       message = "not scanning";
       return false;
     }
-    publish_status();
+    transition(publish_status());          // pause / resume: same scan, same scan_id
     return true;
   }
 
@@ -233,8 +242,40 @@ class ScanControllerNode : public rclcpp::Node {
     }
   }
 
+  // ---- scan identity (scan/session_state) ----
+  // Every scan transition: the scan_id with the exact stamp of the scan/status message published
+  // for it, so subscribers following scan/status can match the two without guessing by time.
+  void transition(const builtin_interfaces::msg::Time& status_stamp) {
+    ++transition_seq_;
+    transition_stamp_ = status_stamp;
+    publish_session(true);
+  }
+
+  void publish_session(bool is_transition) {
+    Session m;
+    m.header.stamp = now();
+    m.scan_id = scan_id_;
+    m.controller_instance_id = controller_id_;
+    m.transition_seq = transition_seq_;
+    m.is_transition = is_transition;
+    m.state = state_;
+    m.status_stamp = transition_stamp_;
+    session_pub_->publish(m);
+  }
+
+  static std::string make_uuid() {  // random (version 4) UUID
+    static std::mt19937_64 rng{std::random_device{}()};
+    const uint64_t a = rng(), b = rng();
+    char text[37];
+    std::snprintf(text, sizeof(text), "%08x-%04x-4%03x-%04x-%012llx", static_cast<unsigned>(a >> 32),
+                  static_cast<unsigned>((a >> 16) & 0xffff), static_cast<unsigned>(a & 0xfff),
+                  static_cast<unsigned>(0x8000 | ((b >> 48) & 0x3fff)),
+                  static_cast<unsigned long long>(b & 0xffffffffffffULL));
+    return text;
+  }
+
   // ---- scan/status for the operator panel ----
-  void publish_status() {
+  builtin_interfaces::msg::Time publish_status() {
     Status s;
     s.header.stamp = now();
     s.state = state_;
@@ -263,6 +304,7 @@ class ScanControllerNode : public rclcpp::Node {
       s.message = calibration_result_;
     }
     status_pub_->publish(s);
+    return s.header.stamp;
   }
 
   EncoderScale scale_;
@@ -280,6 +322,10 @@ class ScanControllerNode : public rclcpp::Node {
   rclcpp::Time stalled_since_{0, 0, RCL_ROS_TIME}, calibration_result_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Publisher<Command>::SharedPtr command_pub_;
   rclcpp::Publisher<Status>::SharedPtr status_pub_;
+  rclcpp::Publisher<Session>::SharedPtr session_pub_;
+  std::string controller_id_, scan_id_;
+  uint64_t transition_seq_ = 0;
+  builtin_interfaces::msg::Time transition_stamp_;
   rclcpp::Subscription<msg::NanoStatus>::SharedPtr nano_sub_;
   rclcpp::Subscription<msg::LaserStatus>::SharedPtr laser_sub_;
   rclcpp::Subscription<msg::Motion>::SharedPtr motion_sub_;
@@ -288,7 +334,7 @@ class ScanControllerNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr slip_sub_;
   rclcpp::Subscription<Calibration>::SharedPtr calibration_sub_;
   rclcpp::Service<Trigger>::SharedPtr start_srv_, stop_srv_, pause_srv_, zero_srv_;
-  rclcpp::TimerBase::SharedPtr monitor_timer_, status_timer_;
+  rclcpp::TimerBase::SharedPtr monitor_timer_, status_timer_, session_timer_;
 };
 
 }  // namespace laser_hhrp

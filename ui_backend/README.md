@@ -2,9 +2,9 @@
 
 ROS 2 `ament_python` package. It holds the authoritative inspection state, keeps the canonical
 history in SQLite, and serves the HTTP/WebSocket API used by the browser UI ([../ui_web](../ui_web)).
-Contract: [plan.md](../plan.md). Status: **Phase 2**. It runs on live ROS (read-only bridge, one supervised
-detector) or on the mock source. Live detections are a **preview**: shown, never recorded or acceptable,
-until Phase 3 adds tagged scan identity and finalization.
+Contract: [plan.md](../plan.md). Status: **Phase 3**. On live ROS it records every physical scan under the
+controller's scan UUID, waits for the selected detector's finalization, links the raw recording and verifies
+it. Also runs on the mock source without ROS.
 
 ## Run
 
@@ -30,11 +30,20 @@ does not forward SIGTERM and would leave the server, and its detector, running.
 | `--analysis-warn-s` / `--analysis-fail-s` | 10 / 120 | watchdog after switch release |
 | `--static` | installed `share/laser_hhrp_ui/web` if present | built frontend |
 
-**Live ROS (Phase 2).** `ros_bridge.py` subscribes read-only to `scan/status`, `laser/status`, `nano/status`,
-`scan/storage` and `inspection/result`; it never publishes or calls a service. `detector_supervisor.py` runs
+**Live ROS.** `ros_bridge.py` subscribes read-only to `scan/status`, `laser/status`, `nano/status`,
+`scan/storage` (readiness) and the tagged identity topics: `scan/session_state` (scan transitions),
+`scan/stream_closed`, `inspection/result_tagged`, `inspection/detection_finalized`, `scan/recording_session`.
+It never publishes or calls a service; the untagged `inspection/result` is ignored. Identity subscriptions are
+volatile, so old transitions replayed after a backend restart cannot create scans. The detector runs with
+`tagged:=true`.
+
+**Raw recording.** The recorder's session is matched to its scan by the exact stamp of the start transition,
+never by time. When both the session and the scan's frame stream have closed, `frames.bin` is walked record by
+record: the scan is replay-eligible only if the file is complete and holds exactly the frames the scan
+published. Retry Analysis is still refused (replay into the detector is not implemented), with the reason. `detector_supervisor.py` runs
 `hole_detector` (CSK Depth) or `rivet_detector` (Rivet Flushness), never both, with the package's own
-`params.yaml` and a fixed argv. Ready requires the process **and** its node subscribing `/scan/frame` and
-publishing `/inspection/result`. A detector node the UI did not start (core launched with `holes:=true`)
+`params.yaml` and a fixed argv. Ready requires the process **and** its node subscribing `/scan/frame_tagged` and
+publishing `/inspection/result_tagged`. A detector node the UI did not start (core launched with `holes:=true`)
 or a second one makes the state Not ready; a crash is reported with its exit code and restarted only
 through `POST /api/v1/detector/restart`.
 
@@ -46,7 +55,7 @@ with FastAPI 0.101. The apt versions are **not yet tested on the Pi** (Phase 5).
 ## Tests
 
 ```bash
-cd ui_backend && python3 -m pytest -q test/        # 94 tests, ~15 s
+cd ui_backend && python3 -m pytest -q test/        # 103 tests, ~15 s
 colcon test --packages-select laser_hhrp_ui           # same tests via colcon
 ```
 
@@ -55,12 +64,11 @@ colcon test --packages-select laser_hhrp_ui           # same tests via colcon
 - `test_api.py`: HTTP + WebSocket through FastAPI's TestClient with the mock source.
 - `test_mock_scenarios.py`: every mock scenario end to end at 40× speed.
 - `test_models_repository.py`: validation, the detector-result contract, schema/WAL/constraints.
-- `test_preview_bridge.py`: Phase 2 preview (nothing persisted) and the bridge's message conversions.
+- `test_preview_bridge.py`: the bridge's message conversions (tagged topics) and the Phase 2 preview fallback.
 - `test_supervisor.py`: the supervisor with real processes and signals (fake detector executables).
 
-Live check against the simulated core, real detectors and the real ROS graph (30 checks, ~45 s; isolated
-ROS domain, scratch HOME): `tools/ui_verify/phase2_ros_check.sh` (see
-[VERIFY_PHASE2.md](../docs/operator_ui/VERIFY_PHASE2.md)).
+Live checks against the simulated core, real detectors and the real ROS graph (isolated ROS domain, scratch
+HOME): see [VERIFY_PHASE3.md](../docs/operator_ui/VERIFY_PHASE3.md).
 
 To check that the tests catch real bugs: `python3 ../tools/ui_verify/mutation_check.py` (see
 [VERIFY_PHASE1.md](../docs/operator_ui/VERIFY_PHASE1.md)).
@@ -130,7 +138,7 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
 ## Deviations from plan.md (documented per section 12)
 
 - `ScanTransition.transition_seq` increments on **every** controller transition, not once per scan
-  (`scan_seq`), so a missed stop is detectable as a gap. Phase 3's `ScanSessionState.msg` must carry it.
+  (`scan_seq`), so a missed stop is detectable as a gap. `ScanSessionState.msg` carries it (`transition_seq`).
 - `next_expected_count` starts empty for the very first inspection (no invented default); Ready
   requires it. Later inspections prefill the previous value.
 - A scan whose acquisition ended in `ERROR` fails analysis after its results are stored (plan: an error
@@ -140,7 +148,5 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
 
 ## Not yet
 
-Tagged ROS messages, real finalization, recorded live scans and replay for Retry (Phase 3); CSV/USB export
-and the designed screens (Phase 4); Pi/apt validation (Phase 5). Phase 2 cannot tell whether a detector
-still has pending results when an inspection ends (no finalization yet); the detector is stopped with
-SIGINT, which makes it flush its result files. Everything is verified on an x86 laptop (Humble) only.
+Replay of a verified raw recording for Retry Analysis; CSV/USB export and the designed screens (Phase 4);
+Pi/apt validation and the operator launch (Phase 5). Everything is verified on an x86 laptop (Humble) only.

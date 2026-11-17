@@ -65,6 +65,18 @@ class DetectorStatus:
 
 
 @dataclass(frozen=True)
+class RecordingSession:
+    """The legacy recorder opened / closed a raw session (scan/recording_session). Matched to a scan by the exact
+    stamp of the scan/status transition that caused it; the recorder does not know scan UUIDs."""
+    event: str                   # "OPENED" | "CLOSED" | "OPEN_FAILED"
+    status_stamp_ns: int
+    session_id: str
+    session_dir: str
+    frame_count: int = 0
+    write_failed: bool = False
+
+
+@dataclass(frozen=True)
 class LegacyResult:
     """Untagged /inspection/result (Phase 2 preview). Carries no scan identity, so it is shown live
     but never persisted or attributed to a recorded scan."""

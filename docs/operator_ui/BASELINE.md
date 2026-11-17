@@ -143,6 +143,11 @@ and GPIO use don't skew the numbers; the simulation uses domain 87 and `scan_swi
 drives the real button or hardware. Expect a longer build. Copy the detector bags next to the packages
 to get the bag results.
 
+**Status after Phase 3:** gap 4 (same-second folder collision) is fixed, and so is a related gap the Phase 3
+checks found: the recorder closed `frames.bin` before the synchronizer's flushed last frame(s) arrived. Gap 1
+remains by decision (the UI database is the complete record). Gap 2 is solved in tagged mode (explicit final
+pass); gaps 3 and 5 are made explicit by the stream-close count. See [VERIFY_PHASE3.md](VERIFY_PHASE3.md).
+
 ## 8. Limits of this baseline
 
 - No detector bag regression ran: rerun `run_baseline.sh` where the bags are present (ROS container

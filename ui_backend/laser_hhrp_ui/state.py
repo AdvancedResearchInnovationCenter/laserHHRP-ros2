@@ -15,10 +15,10 @@ from __future__ import annotations
 import uuid as uuidlib
 from dataclasses import dataclass
 
-from . import models
+from . import models, raw_recording
 from .clock import Clock, iso
-from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, ScanTransition,
-                     StreamClosed, TaggedResult)
+from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, RecordingSession,
+                     ScanTransition, StreamClosed, TaggedResult)
 from .models import Acquisition, Analysis, Decision, Mode, Screen
 
 ACQUIRING = (Acquisition.SCANNING.value, Acquisition.PAUSED.value)
@@ -80,6 +80,7 @@ class Engine:
         self._last_progress_mono = 0.0
         self.preview: dict | None = None          # Phase 2: live view of the current physical scan
         self.preview_count = 0
+        self.pending_recordings: dict[int, RecordingSession] = {}   # OPENED before its scan is known
         self._recover()
 
     # ------------------------------------------------------------------ helpers
@@ -232,6 +233,8 @@ class Engine:
             "status": self.status_label(s), "unassigned_reason": s["unassigned_reason"],
             "started_at": s["started_at"], "ended_at": s["ended_at"], "clock_quality": s["clock_quality"],
             "frame_count": s["published_frame_count"], "replay_eligible": bool(s["replay_eligible"]),
+            "raw": {"session_id": s["raw_session_id"], "dir": s["raw_dir"], "state": s["raw_state"],
+                    "frame_count": s["raw_frame_count"], "note": s["raw_note"]},
         }
         if features:
             v["features"] = self.repo.features_of(s["scan_id"])
@@ -312,6 +315,8 @@ class Engine:
             self._on_detector(e)
         elif isinstance(e, LegacyResult):
             self._on_legacy_result(e)
+        elif isinstance(e, RecordingSession):
+            self._on_recording(e)
         else:
             raise TypeError(f"unknown event {type(e).__name__}")
 
@@ -352,6 +357,7 @@ class Engine:
                 return
             if scan["acquisition"] in ACQUIRING:
                 acq = Acquisition.ERROR if e.state == "ERROR" else Acquisition.ENDED
+                self.repo.update_scan(e.scan_id, stop_stamp_ns=e.status_stamp_ns)
                 self._end_acquisition(scan, acq, e.state, e.message or None)
             elif scan["stop_state"] == UNCONFIRMED:
                 self._late_stop_confirmation(e)
@@ -368,7 +374,8 @@ class Engine:
             return
         acq = Acquisition.ERROR if e.state == "ERROR" else Acquisition.ENDED
         note = "stop confirmed late by the controller" + (f": {e.message}" if e.message else "")
-        self.repo.update_scan(e.scan_id, acquisition=acq.value, stop_state=e.state, acquisition_note=note)
+        self.repo.update_scan(e.scan_id, acquisition=acq.value, stop_state=e.state, acquisition_note=note,
+                              stop_stamp_ns=e.status_stamp_ns)
         self._audit("stop_confirmed_late", scan_id=e.scan_id, state=e.state, transition_seq=e.transition_seq)
         self._try_complete(e.scan_id)
 
@@ -401,6 +408,9 @@ class Engine:
             mode=insp["mode"], expected_count=insp["next_expected_count"], analysis=Analysis.PENDING.value)
         self.runtime[e.scan_id] = ScanRuntime()
         self.clear_alert("unassigned_scan")
+        early = self.pending_recordings.pop(e.status_stamp_ns, None)
+        if early is not None:
+            self._on_recording(early)
         self._emit_scan("scan_progress", scan, phase="started")
         for _, early in self.orphans.pop(e.scan_id, []):
             self.handle(early)
@@ -469,6 +479,7 @@ class Engine:
             return
         rt.closed = e
         self.repo.update_scan(e.scan_id, published_frame_count=e.frame_count)
+        self._verify_raw(e.scan_id)
         if e.error:
             self._audit("stream_closed_error", scan_id=e.scan_id, error=e.error)
             self._fail(e.scan_id, f"frame stream closed with error: {e.error}")
@@ -576,7 +587,7 @@ class Engine:
     @property
     def preview_mode(self) -> bool:
         """Live ROS without tagged identity: show, never persist or accept (plan Phase 2)."""
-        return self.source == "ros"
+        return self.source == "ros-preview"
 
     def preview_view(self) -> dict | None:
         p = self.preview
@@ -659,6 +670,44 @@ class Engine:
         self._audit("detector_restart", inspection_uuid=insp["uuid"], actor=op["operator_id"] if op else None)
         self.detector_control.request(Mode(insp["mode"]), insp["uuid"])
         return self.snapshot()
+
+    # ------------------------------------------------------------------ raw recording link (Phase 3)
+    def _on_recording(self, e: RecordingSession) -> None:
+        """Link the recorder's session to its scan by the exact scan/status stamp, then verify it."""
+        if e.event in ("OPENED", "OPEN_FAILED"):
+            rows = self.repo.scans_where("start_stamp_ns = ? AND start_stamp_ns != 0", e.status_stamp_ns)
+            if not rows:
+                self.pending_recordings[e.status_stamp_ns] = e          # its scan may not be known yet
+                while len(self.pending_recordings) > 50:
+                    self.pending_recordings.pop(next(iter(self.pending_recordings)))
+                return
+            scan = rows[0]
+            failed = e.event == "OPEN_FAILED" or e.write_failed
+            self.repo.update_scan(scan["scan_id"], raw_session_id=e.session_id or None, raw_dir=e.session_dir or None,
+                                  raw_state="open_failed" if failed else "open",
+                                  raw_note="the recorder could not open a session" if failed else None)
+            self._audit("raw_recording_linked", scan_id=scan["scan_id"], session_id=e.session_id, event=e.event)
+            return
+        if e.event == "CLOSED":
+            rows = self.repo.scans_where("raw_session_id = ?", e.session_id) if e.session_id else []
+            if not rows:
+                self._audit("raw_recording_unmatched", session_id=e.session_id, event=e.event)
+                return
+            scan = rows[0]
+            self.repo.update_scan(scan["scan_id"], raw_frame_count=e.frame_count,
+                                  raw_state="write_failed" if e.write_failed else "closed")
+            self._verify_raw(scan["scan_id"])
+
+    def _verify_raw(self, scan_id: str) -> None:
+        s = self.repo.scan(scan_id)
+        if s is None or s["raw_state"] not in ("closed", "write_failed"):
+            return                                   # not closed yet: verified when it is
+        if s["raw_state"] == "write_failed":
+            ok, note = False, "the recorder reported a write failure"
+        else:
+            ok, note = raw_recording.verify(s["raw_dir"], s["raw_frame_count"], s["published_frame_count"])
+        self.repo.update_scan(scan_id, replay_eligible=int(ok), raw_note=note)
+        self._audit("raw_recording_verified", scan_id=scan_id, replay_eligible=ok, note=note)
 
     def ingress_overflow(self, dropped: int) -> None:
         """Events were dropped between ROS and the engine: pending results may be incomplete."""
@@ -848,7 +897,12 @@ class Engine:
             raise CommandError(409, "already_decided", f"Scan already {scan['decision']}")
         if raw == "retry":
             if not scan["replay_eligible"]:
-                raise CommandError(409, "not_replayable", "No verified raw recording: Rescan or Keep Incomplete")
+                raise CommandError(409, "not_replayable",
+                                   f"No verified raw recording ({scan['raw_note'] or 'none linked'}): "
+                                   "Rescan or Keep Incomplete")
+            if not getattr(self.detector_control, "can_replay", False):
+                raise CommandError(409, "retry_unavailable", "The raw recording is verified, but replaying it into "
+                                   "the detector is not implemented yet: Rescan or Keep Incomplete")
             scan = self.repo.update_scan(scan_id, analysis=Analysis.PENDING.value, analysis_error=None,
                                          analysis_completed_at=None)
             self.runtime[scan_id] = ScanRuntime(released_mono=self.clock.monotonic())

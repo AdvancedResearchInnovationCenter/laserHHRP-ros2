@@ -138,6 +138,12 @@ Plain C++ without ROS: easy to read and unit-tested in `test/test_logic.cpp`.
 | `ScanFrame.msg`, `SyncStats.msg` | `scan/frame` (the synchronized output), `scan/sync` |
 | `CalibrationStatus.msg` | `calibration/status` |
 | `ScanStatus.msg`, `StorageStatus.msg`, `InspectionResult.msg` | `scan/status`, `scan/storage`, `inspection/result` |
+| `ScanSessionState.msg` | `scan/session_state`: the scan UUID of each transition, with the exact `scan/status` stamp (operator UI metadata; `scan/status` alone drives acquisition) |
+| `TaggedScanFrame.msg`, `ScanStreamClosed.msg` | `scan/frame_tagged` (each frame with its scan UUID, next to the unchanged `scan/frame`), `scan/stream_closed` (frames published per scan) |
+| `TaggedInspectionResult.msg`, `DetectionFinalized.msg` | `inspection/result_tagged`, `inspection/detection_finalized` (detectors in tagged mode) |
+| `ScanRecordingSession.msg` | `scan/recording_session`: the recorder opened / closed a raw session (operator UI links it to the scan) |
+
+The operator UI messages are additive: the original messages are unchanged, so existing bags still replay.
 
 ### Developer docs (`docs/`)
 
@@ -195,6 +201,10 @@ The calibration file (`calibration.file`, default `~/laser_hhrp/calibration.yaml
 
 `system.storage_path` (default `~/laser_hhrp/scans`) gets one folder per scan:
 `frames.bin` (every `ScanFrame`), `results.json`, `session.json` (times, counts, all parameters).
+A scan started within the same second as the previous one gets `<time>-2`, `-3` ...: a folder is never reused.
+At the stop the session stays open for the scan's last flushed frames (until `scan/stream_closed`, at most
+2 s), so `frames.bin` holds every frame the scan published. `results.json` still holds only the results that
+arrived while recording; the operator UI's database is the complete record.
 
 ```python
 from read_session import read_frames          # scripts/read_session.py

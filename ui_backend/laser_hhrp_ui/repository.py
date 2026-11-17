@@ -99,6 +99,13 @@ MIGRATIONS = [
         detail_json     TEXT NOT NULL
     );
     """,
+    # 2: raw recording link (Phase 3): stop transition stamp, recorder session state, verification result
+    """
+    ALTER TABLE scans ADD COLUMN stop_stamp_ns INTEGER;
+    ALTER TABLE scans ADD COLUMN raw_frame_count INTEGER;
+    ALTER TABLE scans ADD COLUMN raw_state TEXT;
+    ALTER TABLE scans ADD COLUMN raw_note TEXT
+    """,
 ]
 
 SCAN_FIELDS = {
@@ -106,7 +113,7 @@ SCAN_FIELDS = {
     "ended_at", "acquisition", "stop_state", "acquisition_note", "published_frame_count",
     "emitted_result_count", "detected_target_count", "analysis", "analysis_error",
     "analysis_completed_at", "decision", "decided_by", "decided_at", "count_mismatch",
-    "raw_session_id", "raw_dir", "replay_eligible"}
+    "raw_session_id", "raw_dir", "replay_eligible", "stop_stamp_ns", "raw_frame_count", "raw_state", "raw_note"}
 
 
 def default_db_path() -> Path:

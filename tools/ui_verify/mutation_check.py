@@ -84,6 +84,12 @@ MUTATIONS = [
      "if not self.repo.same_feature(e.scan_id, e.detector_mode, e.result_seq, feature, e.detail):",
      "if not [f for f in self.repo.features_of(e.scan_id)\n"
      "                    if f['result_seq'] == e.result_seq and f['feature_id'] == e.feature_id]:"),
+    # Phase 3: raw recording link and retry guard
+    ("Raw recording replay-eligible without checking frames.bin [5 raw identity]", "raw_recording.py",
+     "    n, error = count_records(Path(raw_dir) / \"frames.bin\")\n",
+     "    return True, \"frames.bin verified\"\n    n, error = count_records(Path(raw_dir) / \"frames.bin\")\n"),
+    ("Retry allowed although replay is not implemented [4.5]", "state.py",
+     'if not getattr(self.detector_control, "can_replay", False):', "if False:"),
 ]
 
 

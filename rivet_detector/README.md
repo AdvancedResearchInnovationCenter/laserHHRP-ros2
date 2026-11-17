@@ -26,6 +26,14 @@ ros2 bag play /bags/panel2_09112026_02 --topics /scan/frame
   - Labels read `#3  Ø8.97  rivet` / `h 0.18  rms 0.03  cov 100%`.
 - **Files:** `out_dir/rivet_scan_<time>/` holds `summary.csv` and `rivet_NN.pcd`: every raw point within the head edge + `boundary_margin`. A worker thread writes them, so detection never waits for the disk.
 
+**Tagged mode (operator UI, `tagged: true`; off by default).** Started by the UI's detector supervisor. Input
+`/scan/frame_tagged` + `/scan/stream_closed` instead of `/scan/frame`; each scan UUID gets its own tracker and
+`out_dir/<scan UUID>/` (made at once, also for a scan with nothing found). When the stream close has arrived
+and frames 0..n-1 are all in, the last frames get their detection pass, the files are flushed and exactly one
+`/inspection/detection_finalized` is published, without waiting for a next scan. Results also go to
+`/inspection/result_tagged` (numbered per scan). Missing frames fail the scan after `final_wait_s` (10 s);
+a frame stream closed with an error fails it too. The legacy `/inspection/result` is still published.
+
 ## Parameters (`config/params.yaml`, mm)
 
 - `rivet_diam`: nominal head diameter, 9. `diam_tol`: accepted ± around it, 2.

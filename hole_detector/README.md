@@ -50,6 +50,14 @@ ros2 run hole_detector hole_detector --ros-args --params-file <params.yaml> -p i
 | `/holes/surface` | The decided strip coloured by depth; only with `viz_surface: true` (default false: costs CPU on the Pi) |
 | `/inspection/result` | `laser_hhrp/InspectionResult` per hole. `feature_type` is `countersink` or `hole`; `detail` is JSON: `id, d_top_mm, rms_mm, ring_coverage, countersunk, partial, scanned_share`. `-1` means not measured (countersink depth, flushness) |
 
+**Tagged mode (operator UI, `tagged: true`; off by default).** Started by the UI's detector supervisor. Input
+`/scan/frame_tagged` + `/scan/stream_closed` instead of `/scan/frame`; each scan UUID gets its own tracker and
+`out_dir/<scan UUID>/` (made at once, also for a scan with nothing found). When the stream close has arrived
+and frames 0..n-1 are all in, the last frames get their detection pass, the files are flushed and exactly one
+`/inspection/detection_finalized` is published, without waiting for a next scan. Results also go to
+`/inspection/result_tagged` (numbered per scan). Missing frames fail the scan after `final_wait_s` (10 s);
+a frame stream closed with an error fails it too. The legacy `/inspection/result` is still published.
+
 Parameters are in `config/params.yaml` (mm). Each cloud logs its timing: `convert / detect / publish ms`.
 
 | Parameter | Use |

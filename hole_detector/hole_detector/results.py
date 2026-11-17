@@ -41,6 +41,16 @@ class ScanFolder:
     def new_scan(self):
         self.path = None
 
+    def make_fixed(self, path):
+        """Operator UI mode: the scan's folder named by its scan UUID, made at once (also for a scan with no
+        result) with the summary.csv header. Returns the path; save() writes there while `path` is set to it."""
+        path.mkdir(parents=True, exist_ok=True)
+        summary = path / "summary.csv"
+        if not summary.exists():
+            with summary.open("w", newline="") as handle:
+                csv.writer(handle).writerow(CSV_COLUMNS)
+        return path
+
     def save(self, hole, previous):
         """Append the hole's row and write its raw boundary points. `previous` is the hole before it, or None."""
         if self.path is None:

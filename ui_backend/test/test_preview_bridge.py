@@ -15,7 +15,7 @@ def rivet(fid, partial=False, y=0.02):
 
 
 def ros_ready(mode="rivet_flushness", count=10):
-    h = Harness(source="ros")
+    h = Harness(source="ros-preview")
     insp = h.ready_inspection(mode, count=count)
     return h, insp
 
@@ -58,7 +58,7 @@ def test_new_physical_scan_starts_a_clean_preview():
 
 
 def test_scan_without_inspection_is_not_previewed():
-    h = Harness(source="ros")
+    h = Harness(source="ros-preview")
     h.engine.set_operator("op")
     h.hw(scan_state="SCANNING")
     assert any(a["code"] == "unassigned_scan" for a in h.engine.alerts)
@@ -128,3 +128,31 @@ def test_legacy_result_parsing():
     for bad in ("not json", "[1, 2]", ""):
         assert legacy_result(NS(feature_type="hole", position_m=[0, 0, 0], detail=bad,
                                 header=NS(stamp=NS(sec=0, nanosec=0)))).detail == {}
+
+
+# ---------------------------------------------------------------- Phase 3 tagged conversions
+from laser_hhrp_ui.ros_bridge import (detection_finalized, recording_session, scan_transition,  # noqa: E402
+                                      stream_closed, tagged_result)
+
+
+def test_session_state_to_transition():
+    m = NS(is_transition=True, scan_id="u-1", controller_instance_id="c", transition_seq=7, state=1,
+           status_stamp=NS(sec=5, nanosec=9))
+    t = scan_transition(m)
+    assert (t.scan_id, t.transition_seq, t.state, t.status_stamp_ns) == ("u-1", 7, "SCANNING", 5_000_000_009)
+    assert scan_transition(NS(**{**m.__dict__, "is_transition": False})) is None      # periodic snapshot
+    assert scan_transition(NS(**{**m.__dict__, "scan_id": ""})) is None               # before any scan
+
+
+def test_tagged_conversions():
+    assert stream_closed(NS(scan_id="u", frame_count=12, stop_state=3, error="x")).stop_state == "ERROR"
+    r = tagged_result(NS(scan_id="u", result_seq=2, detector_mode="csk_depth", feature_id=3,
+                         result=NS(feature_type="countersink", position_m=[0.01, 0.02, 0.0], detail='{"id": 3}',
+                                   countersink_depth_m=-1.0, flushness_m=-1.0)))
+    assert (r.result_seq, r.feature_id, r.detail, r.position_m) == (2, 3, {"id": 3}, (0.01, 0.02, 0.0))
+    f = detection_finalized(NS(scan_id="u", detector_mode="rivet_flushness", frame_count=10, emitted_result_count=2,
+                               detected_target_count=2, success=False, error="missing frames"))
+    assert (f.success, f.error, f.emitted_result_count) == (False, "missing frames", 2)
+    rs = recording_session(NS(event=1, status_stamp=NS(sec=1, nanosec=2), session_id="20261117-1",
+                              session_dir="/d", frame_count=5, write_failed=False))
+    assert (rs.event, rs.status_stamp_ns, rs.frame_count) == ("CLOSED", 1_000_000_002, 5)

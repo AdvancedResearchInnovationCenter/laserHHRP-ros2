@@ -3,8 +3,9 @@
 - Allowlist: CSK Depth -> hole_detector, Rivet Flushness -> rivet_detector; fixed argv, no shell, no
   user text in arguments (only the inspection UUID in the output path).
 - Each package's own config/params.yaml, as detectors.launch.py uses, plus out_dir under the UI data root.
-- Ready = process alive AND its ROS node is the only one of that name AND it subscribes to /scan/frame
-  AND publishes /inspection/result. A PID alone is never "ready".
+- Tagged mode (tagged:=true): per-scan identity, a final pass on scan close, DetectionFinalized.
+- Ready = process alive AND its ROS node is the only one of that name AND it subscribes to /scan/frame_tagged
+  AND publishes /inspection/result_tagged. A PID alone is never "ready".
 - A detector node we did not start (e.g. the core launched with holes:=true) or the other mode's
   detector makes the state NOT READY with the reason; the supervisor never starts a duplicate.
 - Crash -> alive False with the exit code; restart only on explicit request.
@@ -29,8 +30,8 @@ from .events import DetectorStatus
 from .models import DETECTOR, Mode
 
 log = logging.getLogger("laser_hhrp_ui.supervisor")
-FRAME_TOPIC = "/scan/frame"
-RESULT_TOPIC = "/inspection/result"
+FRAME_TOPIC = "/scan/frame_tagged"            # tagged mode (Phase 3): scan identity in ...
+RESULT_TOPIC = "/inspection/result_tagged"    # ... tagged results and DetectionFinalized out
 
 
 def resolve_detector(package: str) -> tuple[str, str]:
@@ -151,7 +152,7 @@ class DetectorSupervisor:
         exe, params = self.resolve(name)
         out_dir = self.out_root / inspection_uuid
         out_dir.mkdir(parents=True, exist_ok=True)
-        cmd = [exe, "--ros-args", "--params-file", params, "-p", f"out_dir:={out_dir}"]
+        cmd = [exe, "--ros-args", "--params-file", params, "-p", f"out_dir:={out_dir}", "-p", "tagged:=true"]
         logf = open(self.log_dir / f"{name}.log", "ab")
         logf.write(f"\n=== {time.strftime('%Y-%m-%d %H:%M:%S')} start {cmd}\n".encode())
         logf.flush()

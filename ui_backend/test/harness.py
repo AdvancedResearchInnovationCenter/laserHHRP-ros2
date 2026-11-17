@@ -14,6 +14,8 @@ TARGET = {"csk_depth": "countersink", "rivet_flushness": "rivet"}
 
 
 class FakeDetectorControl:
+    can_replay = True                      # tests exercise the retry path
+
     def __init__(self):
         self.calls = []
 

@@ -2,6 +2,7 @@
 A copy of the hole node's wiring (same inputs, threading, outputs), on /rivets/*; nothing is imported from it."""
 
 import threading
+from collections import deque
 import time
 from pathlib import Path
 
@@ -25,9 +26,26 @@ try:
 except ImportError:  # the node still runs on input_type cloud where laser_hhrp is not built
     InspectionResult = ScanFrame = None
 
+try:   # operator UI messages (newer laser_hhrp only); legacy mode works without them
+    from laser_hhrp.msg import DetectionFinalized, ScanStreamClosed, TaggedInspectionResult, TaggedScanFrame
+except ImportError:
+    DetectionFinalized = ScanStreamClosed = TaggedInspectionResult = TaggedScanFrame = None
+
+MODE = "rivet_flushness"                      # detector_mode in the tagged messages (the operator UI's inspection mode)
 VIEW_VOXEL = 0.0003                # m: the RViz copy of the cut-outs
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                      durability=DurabilityPolicy.TRANSIENT_LOCAL)
+
+
+class ScanJob:
+    """Operator UI (tagged) mode: one scan's frames, tracker and results, keyed by its scan UUID."""
+
+    def __init__(self, scan_id, tracker, path):
+        self.scan_id, self.tracker, self.path = scan_id, tracker, path
+        self.frames, self.indices = FrameCloud(), set()
+        self.header, self.fresh = None, False
+        self.closed, self.closed_at = None, None       # ScanStreamClosed and its monotonic arrival
+        self.result_seq = self.targets = 0
 
 
 class RivetDetector(Node):
@@ -41,6 +59,10 @@ class RivetDetector(Node):
         # The decided surface, coloured by depth below the fit: turn off on the Pi to save CPU and network.
         self.declare_parameter("viz_surface", False)
         self.declare_parameter("period", 0.2)    # s between detection cycles (frame input)
+        # Operator UI: scan identity in, tagged results and a terminal acknowledgement out (see setup_tagged).
+        self.declare_parameter("tagged", False)
+        self.declare_parameter("final_wait_s", 10.0)   # after the stream close: wait this long for missing frames
+        self.tagged, self.job = self.get_parameter("tagged").value, None
         self.viz_surface = self.get_parameter("viz_surface").value
         self.folder = results.ScanFolder(Path(self.get_parameter("out_dir").value).expanduser(),
                                          self.get_logger().info)
@@ -49,6 +71,7 @@ class RivetDetector(Node):
             self.declare_parameter(name, value if name in UNITLESS else value * 1000)
         params = {n: self.get_parameter(n).value if n in UNITLESS else self.get_parameter(n).value * 0.001
                   for n in DEFAULTS}
+        self.params = params
         self.tracker = Tracker(params, log=self.get_logger().info)
         self.markers, self.circles, self.poses = [], [], []
         self.views = []                    # each rivet's cut-out downsampled for RViz (/rivets/boundary_view)
@@ -68,7 +91,9 @@ class RivetDetector(Node):
         self.pub_result = (self.create_publisher(InspectionResult, "/inspection/result", 10)
                            if InspectionResult else None)
         topic = self.get_parameter("input_topic").value
-        if self.get_parameter("input_type").value == "frame":
+        if self.get_parameter("input_type").value == "frame" and self.tagged:
+            self.setup_tagged()
+        elif self.get_parameter("input_type").value == "frame":
             if ScanFrame is None:
                 raise RuntimeError("input_type frame needs laser_hhrp: source /laser_ws/install/setup.bash")
             self.frames, self.last_frame, self.fresh, self.scan = FrameCloud(), None, False, 0
@@ -115,13 +140,119 @@ class RivetDetector(Node):
             if scan == self.scan:          # a new scan may have started meanwhile: its points stay
                 self.frames.trim(self.tracker)
 
+    # ---- operator UI (tagged) mode -------------------------------------------------------------
+    # Frames come with their scan UUID (/scan/frame_tagged); each scan gets its own job (tracker, output
+    # folder named by the UUID, made at once). When /scan/stream_closed has arrived and frames
+    # 0..frame_count-1 are all in, the job's remaining frames get their last detection pass, the files are
+    # flushed and exactly one DetectionFinalized is published, without waiting for a next scan. Missing
+    # frames fail the scan after final_wait_s; nothing beyond the scanned length is invented.
+    def setup_tagged(self):
+        if TaggedScanFrame is None:
+            raise RuntimeError("tagged mode needs laser_hhrp with the operator UI messages")
+        self.jobs, self.done_ids, self.current = {}, deque(maxlen=500), None
+        self.late_frames = 0
+        self.lock = threading.Lock()
+        reliable = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE)
+        inputs = MutuallyExclusiveCallbackGroup()
+        # 400 deep: ~3 s of profiles while a detection runs; a lost frame fails the scan, it is never skipped.
+        self.create_subscription(TaggedScanFrame, "/scan/frame_tagged", self.on_tagged_frame, QoSProfile(
+            depth=400, reliability=ReliabilityPolicy.RELIABLE), callback_group=inputs)
+        # Volatile: closes of scans from before this process started are none of its business.
+        self.create_subscription(ScanStreamClosed, "/scan/stream_closed", self.on_stream_closed, reliable,
+                                 callback_group=inputs)
+        self.pub_tagged = self.create_publisher(TaggedInspectionResult, "/inspection/result_tagged", QoSProfile(
+            depth=200, reliability=ReliabilityPolicy.RELIABLE))
+        self.pub_final = self.create_publisher(DetectionFinalized, "/inspection/detection_finalized", QoSProfile(
+            depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.create_timer(self.get_parameter("period").value, self.on_tagged_timer,
+                          callback_group=MutuallyExclusiveCallbackGroup())
+        self.get_logger().info("tagged mode (operator UI): /scan/frame_tagged -> /inspection/result_tagged")
+
+    def job_for(self, scan_id):
+        """The scan's job, made on first sight (caller holds the lock)."""
+        job = self.jobs.get(scan_id)
+        if job is None:
+            path = self.folder.make_fixed(self.folder.root / scan_id)
+            job = self.jobs[scan_id] = ScanJob(scan_id, Tracker(self.params, log=self.get_logger().info), path)
+            self.get_logger().info("scan %s: results in %s" % (scan_id, path))
+        return job
+
+    def on_tagged_frame(self, msg):
+        with self.lock:
+            if msg.scan_id in self.done_ids:
+                self.late_frames += 1              # its scan is already finalized: never re-opened
+                return
+            job, f = self.job_for(msg.scan_id), msg.frame
+            if f.index in job.indices:
+                return                             # redelivered
+            job.indices.add(f.index)
+            job.frames.add(f.x_m, f.position_m, f.z_m, f.valid)
+            job.header, job.fresh = f.header, True
+
+    def on_stream_closed(self, msg):
+        with self.lock:
+            if msg.scan_id in self.done_ids:
+                return
+            job = self.job_for(msg.scan_id)
+            if job.closed is None:
+                job.closed, job.closed_at = msg, time.monotonic()
+
+    def on_tagged_timer(self):
+        with self.lock:
+            jobs = list(self.jobs.values())
+        for job in jobs:                           # oldest first: a finishing scan before the next one
+            t0 = time.time()
+            with self.lock:
+                fresh, job.fresh = job.fresh, False
+                xyz, header = (job.frames.cloud(), job.header) if fresh else (None, None)
+            if fresh:
+                if self.current is not job:        # RViz shows the newest scan
+                    self.current = job
+                    self.tracker = job.tracker
+                    self.new_scan(Header(stamp=header.stamp, frame_id="laser"))
+                self.tracker, self.folder.path, self.job = job.tracker, job.path, job
+                self.process(xyz, self.stamp_of(header), Header(stamp=header.stamp, frame_id="laser"), t0)
+                self.job = None
+                with self.lock:
+                    job.frames.trim(job.tracker)
+            self.maybe_finalize(job)
+
+    def maybe_finalize(self, job):
+        with self.lock:
+            closed, fresh = job.closed, job.fresh
+            have, top = len(job.indices), max(job.indices, default=-1)
+        if closed is None or fresh:
+            return                                 # not closed yet, or frames still to process first
+        n = closed.frame_count
+        if have > n or top >= n:
+            self.finalize_job(job, False, "received frames beyond the %d declared" % n)
+        elif have == n:                            # every frame 0..n-1 is in and processed: the final pass ran
+            self.finalize_job(job, not closed.error, ("frame stream: " + closed.error) if closed.error else "")
+        elif time.monotonic() - job.closed_at > self.get_parameter("final_wait_s").value:
+            self.finalize_job(job, False, "missing frames: %d of %d never arrived" % (n - have, n))
+
+    def finalize_job(self, job, success, error):
+        self.folder.close()                        # every queued CSV row and PCD is on disk first
+        msg = DetectionFinalized(scan_id=job.scan_id, detector_mode=MODE, frame_count=len(job.indices),
+                                 emitted_result_count=job.result_seq, detected_target_count=job.targets,
+                                 success=success, error=error)
+        msg.header.stamp = self.get_clock().now().to_msg()
+        self.pub_final.publish(msg)
+        with self.lock:
+            self.jobs.pop(job.scan_id, None)
+            self.done_ids.append(job.scan_id)
+        self.get_logger().info("scan %s finalized: %s, %d frames, %d results (%d targets)%s" % (
+            job.scan_id, "ok" if success else "FAILED", len(job.indices), job.result_seq, job.targets,
+            (": " + error) if error else ""))
+
     @staticmethod
     def stamp_of(header):
         return header.stamp.sec + header.stamp.nanosec * 1e-9
 
     def new_scan(self, header):
         """Clear RViz and start a new output folder."""
-        self.folder.new_scan()
+        if not self.tagged:                # tagged: each job has its UUID folder
+            self.folder.new_scan()
         self.markers, self.circles, self.poses = [Marker(action=Marker.DELETEALL)], [], []
         self.views = []
         self.shown_rejected, self.shown_bands = set(), 0
@@ -181,8 +312,15 @@ class RivetDetector(Node):
         self.poses.append(viz.pose(rivet.centre, rivet.normal))
         self.pub_boundary.publish(viz.id_cloud(header, rivet.boundary, rivet.id))
         self.folder.save(rivet, other)
+        result = results.inspection_result(InspectionResult, header, rivet) if InspectionResult else None
         if self.pub_result:
-            self.pub_result.publish(results.inspection_result(InspectionResult, header, rivet))
+            self.pub_result.publish(result)
+        job = self.job
+        if job is not None:                        # tagged: numbered per scan, published once
+            self.pub_tagged.publish(TaggedInspectionResult(scan_id=job.scan_id, result_seq=job.result_seq,
+                                                           detector_mode=MODE, feature_id=rivet.id, result=result))
+            job.result_seq += 1
+            job.targets += int(bool(True))
 
     def publish_state(self, header):
         """Latched topics always hold every rivet and rejection of the current scan, for a late RViz."""

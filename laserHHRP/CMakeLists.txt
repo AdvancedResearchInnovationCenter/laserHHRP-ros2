@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -17,7 +18,7 @@ find_package(ament_index_cpp REQUIRED)
 
 # ---- messages ----------------------------------------------------------------------------------
 file(GLOB MSG_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} msg/*.msg)
-rosidl_generate_interfaces(${PROJECT_NAME} ${MSG_FILES} DEPENDENCIES std_msgs geometry_msgs)
+rosidl_generate_interfaces(${PROJECT_NAME} ${MSG_FILES} DEPENDENCIES builtin_interfaces std_msgs geometry_msgs)
 rosidl_get_typesupport_target(MSGS_TARGET ${PROJECT_NAME} rosidl_typesupport_cpp)
 
 # ---- scanCONTROL SDK (installed separately, see README) ----------------------------------------

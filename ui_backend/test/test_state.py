@@ -547,3 +547,76 @@ def test_redelivery_counts_as_duplicate_only_if_identical():
     v = h.scan(sid)
     assert v["analysis"] == "failed" and "different content" in v["analysis_error"]
     assert v["features"][0]["y_mm"] == 15.0            # the stored result is not overwritten
+
+
+# ---------------------------------------------------------------- Phase 3 raw recording link
+import struct  # noqa: E402
+
+from laser_hhrp_ui.events import RecordingSession  # noqa: E402
+
+
+def write_frames_bin(path, n, truncate=False):
+    path.mkdir(parents=True, exist_ok=True)
+    data = b"".join(struct.pack("<I", 10) + bytes(10) for _ in range(n))
+    (path / "frames.bin").write_bytes(data[:-3] if truncate else data)
+
+
+def recorded_scan(h, tmp_path, frames=20, recorded=None, truncate=False, open_first=False, write_failed=False):
+    """A scan with a raw recording: OPENED matched by the start stamp, CLOSED with `recorded` frames."""
+    raw = tmp_path / "rec"
+    write_frames_bin(raw, frames if recorded is None else recorded, truncate)
+    start_stamp = (h.seq + 1) * 1000                   # what h.press() will use as status_stamp_ns
+    opened = RecordingSession("OPENED", start_stamp, "20261117-120000", str(raw))
+    if open_first:
+        h.handle(opened)                               # before the scan is known: kept pending
+    sid = h.press()
+    if not open_first:
+        h.handle(opened)
+    h.release(sid)
+    h.close(sid, frames)
+    h.handle(RecordingSession("CLOSED", h.seq * 1000, "20261117-120000", str(raw),
+                              frames if recorded is None else recorded, write_failed))
+    h.finalize(sid, frames, emitted=0, targets=0)
+    return sid
+
+
+@pytest.mark.parametrize("open_first", [False, True])
+def test_raw_recording_linked_by_stamp_and_verified(tmp_path, open_first):
+    h = Harness()
+    h.ready_inspection(count=1)
+    sid = recorded_scan(h, tmp_path, open_first=open_first)
+    v = h.scan(sid)
+    assert v["raw"]["dir"] == str(tmp_path / "rec") and v["raw"]["state"] == "closed"
+    assert v["replay_eligible"] and v["raw"]["note"] == "frames.bin verified: 20 frames"
+
+
+@pytest.mark.parametrize("kwargs, note", [
+    ({"truncate": True}, "frames.bin damaged"),
+    ({"recorded": 19}, "frames.bin holds 19 frames, the scan published 20"),
+    ({"write_failed": True}, "the recorder reported a write failure"),
+])
+def test_raw_recording_not_replayable(tmp_path, kwargs, note):
+    h = Harness()
+    h.ready_inspection(count=1)
+    sid = recorded_scan(h, tmp_path, **kwargs)
+    v = h.scan(sid)
+    assert not v["replay_eligible"] and note in v["raw"]["note"]
+
+
+def test_retry_refused_while_replay_is_not_implemented(tmp_path):
+    h = Harness()
+    h.det.can_replay = False                           # the real supervisor: replay not implemented yet
+    h.ready_inspection(count=1)
+    sid = recorded_scan(h, tmp_path)
+    h.repo.update_scan(sid, analysis="failed", analysis_error="x")
+    with pytest.raises(CommandError) as e:
+        h.engine.failure_action(sid, "retry")
+    assert e.value.code == "retry_unavailable" and h.scan(sid)["replay_eligible"]
+
+
+def test_recording_of_an_unknown_stamp_is_never_attributed(tmp_path):
+    h = Harness()
+    h.ready_inspection(count=1)
+    h.handle(RecordingSession("OPENED", 123456, "x", str(tmp_path)))
+    sid = h.press()                                    # its start stamp differs
+    assert h.scan(sid)["raw"]["dir"] is None

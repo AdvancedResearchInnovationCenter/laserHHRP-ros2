@@ -9,6 +9,13 @@
 // Pairing and IMU interpolation use the Nano clock; frames are stamped in Pi time (nano/clock).
 // Frames are made only while a scan runs (scan/status).
 //
+// Scan identity (operator UI): every frame is also published as scan/frame_tagged with its scan's
+// UUID from scan/session_state. scan/status alone still starts, stops and flushes the scan; the
+// identity is matched by the exact stamp of the scan/status message that started it (either may
+// arrive first: tagged copies wait in a bounded buffer). After the stop flush, scan/stream_closed
+// gives the number of tagged frames published. Pairs still inside the pairer at stop are not
+// published (unchanged capture policy) and are not counted.
+//
 // Subscribes  nano/trigger, nano/encoder, laser/raw, imu/corrected, nano/clock, scan/status,
 //             scan/motion, odometry/laser_pose, calibration/status
 // Publishes
@@ -16,6 +23,8 @@
 //   scan/pose   geometry_msgs/PoseStamped     laser pose at each frame (same stamp), once the
 //                                             extrinsics are calibrated
 //   scan/sync   laser_hhrp/SyncStats          10 Hz
+//   scan/frame_tagged    laser_hhrp/TaggedScanFrame   the same frames with their scan_id
+//   scan/stream_closed   laser_hhrp/ScanStreamClosed  once per scan, after its last tagged frame
 #include <deque>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -29,8 +38,11 @@
 #include "laser_hhrp/msg/imu_sample.hpp"
 #include "laser_hhrp/msg/motion.hpp"
 #include "laser_hhrp/msg/scan_frame.hpp"
+#include "laser_hhrp/msg/scan_session_state.hpp"
+#include "laser_hhrp/msg/scan_stream_closed.hpp"
 #include "laser_hhrp/msg/scan_status.hpp"
 #include "laser_hhrp/msg/sync_stats.hpp"
+#include "laser_hhrp/msg/tagged_scan_frame.hpp"
 #include "laser_hhrp/msg/trigger_record.hpp"
 #include "laser_hhrp/pose.hpp"
 #include "laser_hhrp/software_pairer.hpp"
@@ -40,6 +52,8 @@ namespace laser_hhrp {
 namespace {
 constexpr int64_t kImuWaitNs = 100000000;   // a frame waits up to 100 ms for the IMU after it
 constexpr int64_t kHistoryNs = 2000000000;  // IMU samples / poses kept for interpolation
+constexpr size_t kTagBuffer = 600;          // tagged frames waiting for their scan_id (~5 s at 120 Hz)
+constexpr int64_t kIdentityWaitNs = 5000000000;  // after the stop, how long the identity may still come
 }  // namespace
 
 using Pair = FramePairer::Pair;
@@ -59,6 +73,12 @@ class SynchronizerNode : public rclcpp::Node {
     frame_pub_ = create_publisher<msg::ScanFrame>("scan/frame", rclcpp::QoS(200));
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("scan/pose", 200);
     stats_pub_ = create_publisher<msg::SyncStats>("scan/sync", 10);
+    tagged_pub_ = create_publisher<msg::TaggedScanFrame>("scan/frame_tagged", rclcpp::QoS(200));
+    closed_pub_ = create_publisher<msg::ScanStreamClosed>(
+        "scan/stream_closed", rclcpp::QoS(50).reliable().transient_local());
+    session_sub_ = create_subscription<msg::ScanSessionState>(
+        "scan/session_state", rclcpp::QoS(50).reliable().transient_local(),
+        [this](const msg::ScanSessionState& m) { on_session(m); });
 
     clock_sub_ = create_subscription<msg::ClockMap>(
         "nano/clock", rclcpp::QoS(10).transient_local(), [this](const msg::ClockMap& c) { clock_ = c; have_clock_ = true; });
@@ -68,7 +88,7 @@ class SynchronizerNode : public rclcpp::Node {
     motion_sub_ = create_subscription<msg::Motion>(
         "scan/motion", 10, [this](const msg::Motion& m) { last_count_ = m.encoder_count; });
     scan_sub_ = create_subscription<ScanStatus>(
-        "scan/status", 10, [this](const ScanStatus& s) { follow_scan(s.state); });
+        "scan/status", 10, [this](const ScanStatus& s) { follow_scan(s); });
     imu_sub_ = create_subscription<msg::ImuSample>("imu/corrected", data, [this](const msg::ImuSample& m) {
       imu_history_.push_back(m);
       while (m.device_time_ns - imu_history_.front().device_time_ns > kHistoryNs) imu_history_.pop_front();
@@ -141,15 +161,22 @@ class SynchronizerNode : public rclcpp::Node {
       ready_.pop_front();
     }
     if (now - last_stats_ns_ >= 100000000) publish_stats(now);
+    if (tag_.stop_pending && tag_.scan_id.empty() && now - tag_.stop_ns > kIdentityWaitNs) {
+      RCLCPP_ERROR(get_logger(), "scan identity never arrived: %zu tagged frames dropped, no stream close",
+                   tag_.buffer.size());
+      tag_ = Tag();                                  // the UI fails this scan (missing stream close)
+    }
   }
 
   // ---- scan state ----
   // start: reset everything, remember the count at the start (position 0) and the encoder
   // scale; resume: new trigger numbering, so the hardware pairer locks again; stop: flush.
-  void follow_scan(uint8_t state) {
+  void follow_scan(const ScanStatus& status) {
+    const uint8_t state = status.state;
     if (state == scan_state_) return;
     const bool was_on = scan_state_ == ScanStatus::SCANNING || scan_state_ == ScanStatus::PAUSED;
     if (state == ScanStatus::SCANNING && !was_on) {
+      begin_tag(status.header.stamp);
       ready_.clear();
       pairer_.reset();
       software_.reset();
@@ -166,6 +193,7 @@ class SynchronizerNode : public rclcpp::Node {
       for (const Pair& pair : ready_) publish(pair);
       ready_.clear();
       active_ = false;
+      end_tag(state);                                 // after the last frame of this scan
     }
     scan_state_ = state;
   }
@@ -202,7 +230,89 @@ class SynchronizerNode : public rclcpp::Node {
       out.pose.orientation.z = p.orientation[3];
       pose_pub_->publish(out);
     }
+    publish_tagged(*f);
     frame_pub_->publish(std::move(f));
+  }
+
+  // ---- scan identity (operator UI) ----
+  // Tag: the identity state of the current scan. `start` is the stamp of the scan/status message
+  // that started it; the controller's ScanSessionState for that transition carries the same stamp.
+  struct Tag {
+    builtin_interfaces::msg::Time start;
+    bool started = false, stop_pending = false, overflow = false;
+    std::string scan_id;
+    std::deque<msg::ScanFrame> buffer;   // frames waiting for the scan_id
+    uint32_t published = 0;              // tagged frames published (index 0 .. published-1)
+    uint32_t dropped = 0;
+    uint8_t stop_state = ScanStatus::IDLE;
+    int64_t stop_ns = 0;
+  };
+
+  static bool same(const builtin_interfaces::msg::Time& a, const builtin_interfaces::msg::Time& b) {
+    return a.sec == b.sec && a.nanosec == b.nanosec;
+  }
+
+  void begin_tag(const builtin_interfaces::msg::Time& start) {
+    if (tag_.stop_pending)
+      RCLCPP_ERROR(get_logger(), "previous scan's identity never arrived: its tagged frames are dropped");
+    tag_ = Tag();
+    tag_.start = start;
+    tag_.started = true;
+    for (const auto& s : sessions_)                  // the identity may have arrived first
+      if (s.state == msg::ScanSessionState::SCANNING && same(s.status_stamp, start)) tag_.scan_id = s.scan_id;
+  }
+
+  void on_session(const msg::ScanSessionState& m) {
+    sessions_.push_back(m);
+    while (sessions_.size() > 100) sessions_.pop_front();
+    if (!tag_.started || !tag_.scan_id.empty()) return;
+    if (m.state != msg::ScanSessionState::SCANNING || !same(m.status_stamp, tag_.start)) return;
+    tag_.scan_id = m.scan_id;
+    for (const auto& f : tag_.buffer) send_tagged(f);
+    tag_.buffer.clear();
+    if (tag_.stop_pending) close_tag();
+  }
+
+  void publish_tagged(const msg::ScanFrame& f) {
+    if (!tag_.started) return;
+    if (!tag_.scan_id.empty()) {
+      send_tagged(f);
+    } else if (tag_.buffer.size() < kTagBuffer) {
+      tag_.buffer.push_back(f);
+    } else {
+      if (!tag_.overflow) RCLCPP_ERROR(get_logger(), "scan identity late: tagged frame buffer full");
+      tag_.overflow = true;
+      ++tag_.dropped;
+    }
+  }
+
+  void send_tagged(const msg::ScanFrame& f) {
+    if (tag_.overflow) { ++tag_.dropped; return; }   // never a gap inside a tagged stream
+    msg::TaggedScanFrame t;
+    t.scan_id = tag_.scan_id;
+    t.frame = f;
+    tagged_pub_->publish(t);
+    ++tag_.published;
+  }
+
+  void end_tag(uint8_t stop_state) {
+    if (!tag_.started) return;
+    tag_.stop_pending = true;
+    tag_.stop_state = stop_state;
+    tag_.stop_ns = now_ns();
+    if (!tag_.scan_id.empty()) close_tag();          // else: on_session closes it when the identity comes
+  }
+
+  void close_tag() {
+    msg::ScanStreamClosed c;
+    c.header.stamp = this->now();
+    c.scan_id = tag_.scan_id;
+    c.frame_count = tag_.published;
+    c.stop_state = tag_.stop_state;
+    if (tag_.overflow)
+      c.error = "scan identity arrived late: " + std::to_string(tag_.dropped) + " frames not tagged";
+    closed_pub_->publish(c);
+    tag_ = Tag();
   }
 
   // ---- interpolation helpers (Nano time) ----
@@ -288,6 +398,11 @@ class SynchronizerNode : public rclcpp::Node {
   rclcpp::Publisher<msg::ScanFrame>::SharedPtr frame_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<msg::SyncStats>::SharedPtr stats_pub_;
+  rclcpp::Publisher<msg::TaggedScanFrame>::SharedPtr tagged_pub_;
+  rclcpp::Publisher<msg::ScanStreamClosed>::SharedPtr closed_pub_;
+  rclcpp::Subscription<msg::ScanSessionState>::SharedPtr session_sub_;
+  std::deque<msg::ScanSessionState> sessions_;     // recent identities (transitions and snapshots)
+  Tag tag_;
   rclcpp::Subscription<msg::ClockMap>::SharedPtr clock_sub_;
   rclcpp::Subscription<msg::CalibrationStatus>::SharedPtr calibration_sub_;
   rclcpp::Subscription<msg::Motion>::SharedPtr motion_sub_;
