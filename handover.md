@@ -3,7 +3,8 @@
 For whoever continues this work (developer or coding agent). Read with [plan.md](plan.md), the execution
 contract. This file says **where things stand, how to run and verify them, and what is left**.
 
-State as of 2026-11-17, branch `ui`, after the Phase 4 commit (see `git log`). `dev` and `main` were never touched.
+State as of 2026-11-17, branch `ui` @ `5e6419c` (Phase 4, pushed; this handover update follows it). `dev` and
+`main` were never touched.
 
 ---
 
@@ -16,7 +17,7 @@ State as of 2026-11-17, branch `ui`, after the Phase 4 commit (see `git log`). `
 | External code review of `3d7f52e` (5 findings) | All fixed with regression tests | `e6a2c81` | VERIFY_PHASE1.md, last section |
 | 2 Live ROS bridge, one-detector supervisor | Done (its preview mode was superseded by Phase 3) | `018bb06` | [VERIFY_PHASE2.md](docs/operator_ui/VERIFY_PHASE2.md) |
 | 3 Scan identity, finalization, raw recording link | Done | `140ca9a` | [VERIFY_PHASE3.md](docs/operator_ui/VERIFY_PHASE3.md) |
-| 4 Operator screens (800 × 480), CSV / USB export | Done on the laptop (mock and live ROS); kiosk on the Pi still open | Phase 4 commit | [VERIFY_PHASE4.md](docs/operator_ui/VERIFY_PHASE4.md) |
+| 4 Operator screens (800 × 480), CSV / USB export | Done on the laptop (mock and live ROS); kiosk on the Pi still open | `5e6419c` | [VERIFY_PHASE4.md](docs/operator_ui/VERIFY_PHASE4.md) |
 | 5 Pi 5 deployment and verification | **Not started** | | |
 
 Everything was built and verified on an **x86 laptop, Ubuntu 22.04, ROS 2 Humble**. The target is the
@@ -279,7 +280,15 @@ results in BASELINE.md. Then `tools/ui_verify/legacy_bag_adapter.py <bag>` with 
 - Screens on the real display: run `BROWSER=chromium tools/ui_verify/phase4_screens.sh` on the Pi, then check
   touch, fonts and readability by hand; export to a real USB stick (udisks mount under `/media/<user>/`).
 
-### Optional
-- Retry Analysis by replaying a verified `frames.bin` as tagged frames into the detector (the bag adapter shows
-  the mechanism); the engine's `can_replay` switch gates it.
-- An independent review of Phases 2 and 3.
+### Possible without the Pi or bags
+- **Developer Mode** (plan §3): hidden, disabled until an administrator configures a hashed PIN, no default PIN.
+- **Retry Analysis** by replaying a verified `frames.bin` as tagged frames into the detector (the bag adapter
+  shows the mechanism). Set the detector control's `can_replay` and the screens offer Retry automatically
+  (`retry_available`).
+- **Manual clock verification** procedure (plan §8) for a Pi without RTC: today the UI only shows *Time not
+  verified*.
+- An **independent review** of Phases 2, 3 and 4.
+
+### Things to decide with the user
+- Accept on a count mismatch has no extra confirmation (plan: warns, does not block). Keep or add one?
+- Dark theme only; check readability on the real panel in the hangar before Phase 5 sign-off.
