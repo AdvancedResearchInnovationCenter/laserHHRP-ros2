@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "tsc -p tsconfig.test.json && echo '{\"type\": \"commonjs\"}' > .test-out/package.json && node .test-out/tests/snapshotSync.test.js"
   },
   "dependencies": {
     "react": "18.3.1",

@@ -69,6 +69,21 @@ MUTATIONS = [
      'pass\n        if scan["analysis"] != Analysis.COMPLETE.value:'),
     ("Queue overflow does not fail pending analyses [5.6]", "state.py",
      'self._fail(s["scan_id"], "ROS event queue overflow: results may be lost")', "pass"),
+    # code review of 3d7f52e (findings 1, 2, 5)
+    ("Stream-close error ignored [review 1]", "state.py",
+     '            self._fail(e.scan_id, f"frame stream closed with error: {e.error}")\n            return\n',
+     "            pass\n"),
+    ("Stream stop state not compared with the controller's [review 1]", "state.py",
+     'if c.stop_state != scan["stop_state"]:', "if False:"),
+    ("Inferred stop accepted as a confirmed stop [review 2]", "state.py",
+     'if scan["stop_state"] == UNCONFIRMED:\n            return self._fail(',
+     'if False:\n            return self._fail('),
+    ("Late controller stop confirmation ignored [review 2]", "state.py",
+     "            self._late_stop_confirmation(e)                   # a stop delivered after the next start\n", ""),
+    ("Duplicate judged by sequence and feature id only [review 5]", "state.py",
+     "if not self.repo.same_feature(e.scan_id, e.detector_mode, e.result_seq, feature, e.detail):",
+     "if not [f for f in self.repo.features_of(e.scan_id)\n"
+     "                    if f['result_seq'] == e.result_seq and f['feature_id'] == e.feature_id]:"),
 ]
 
 

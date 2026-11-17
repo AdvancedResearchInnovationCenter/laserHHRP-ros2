@@ -7,6 +7,10 @@ phases can detect regressions. Contract: [plan.md](../../plan.md). Reproduce eve
 tools/ui_baseline/run_baseline.sh [OUT_DIR]     # ~4 min; writes only below OUT_DIR
 ```
 
+Exit code and final verdict: **0 PASSED** (every test ran and passed), **1 FAILED**, **3 INCOMPLETE** (nothing
+failed but tests did not run because bags are missing; SKIP/NODATA are never counted as passes).
+`HHRP_WS=<dir with build/ install/>` reuses an existing build; the C++ build is limited to 2 jobs.
+
 The script builds into `OUT_DIR` (not the workspace), runs all tests, then runs the simulator with a
 fake `HOME`, `ROS_DOMAIN_ID=87` and a loopback-only CycloneDDS config
 ([cyclonedds_loopback.xml](../../tools/ui_baseline/cyclonedds_loopback.xml)), so it touches neither

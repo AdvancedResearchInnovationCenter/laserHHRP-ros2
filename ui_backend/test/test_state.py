@@ -1,5 +1,7 @@
 """Engine: lifecycle, completion barrier, failures, decisions, recovery (plan sections 4, 5, 8, 11)."""
 
+import uuid
+
 import pytest
 
 from harness import Harness
@@ -470,3 +472,78 @@ def test_restart_keeps_history_and_interrupts_unfinished(tmp_path):
         h2.engine.decide(analyzing, "accept")
     h2.engine.failure_action(acquiring, "rescan")
     assert h2.repo.audit_events("recovered_interrupted_analysis")
+
+
+# ---------------------------------------------------------------- review fixes (code review of 3d7f52e)
+def test_stream_close_error_fails_even_when_counts_match():
+    h = Harness()
+    h.ready_inspection(count=2)
+    sid = h.press()
+    h.results(sid, 2)
+    h.release(sid)
+    from laser_hhrp_ui.events import StreamClosed
+    h.handle(StreamClosed(sid, 500, "IDLE", error="pairer overflow"))
+    h.finalize(sid)                                    # counts would match
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and "stream closed with error: pairer overflow" in v["analysis_error"]
+    with pytest.raises(CommandError):
+        h.engine.decide(sid, "accept")
+
+
+def test_stream_stop_state_must_match_the_controller():
+    h = Harness()
+    h.ready_inspection(count=1)
+    sid = h.press()
+    h.result(sid)
+    h.release(sid, "IDLE")
+    h.close(sid, stop_state="ERROR")                  # synchronizer saw an error stop
+    h.finalize(sid)
+    assert "stop state mismatch: controller IDLE, frame stream ERROR" in h.scan(sid)["analysis_error"]
+
+
+def test_inferred_stop_never_completes():
+    h = Harness()
+    h.ready_inspection(count=2)
+    a = h.press()
+    h.results(a, 2)
+    b = h.press()                                      # A's stop transition never arrived
+    assert h.scan(a)["acquisition"] == "ended" and h.repo.scan(a)["stop_state"] == "UNCONFIRMED"
+    h.close(a)
+    h.finalize(a)                                      # everything else matches
+    v = h.scan(a)
+    assert v["analysis"] == "failed" and "stop not confirmed" in v["analysis_error"]
+    with pytest.raises(CommandError):
+        h.engine.decide(a, "accept")
+    assert h.scan(b)["analysis"] == "pending"
+
+
+@pytest.mark.parametrize("late_state, outcome", [("IDLE", "complete"), ("ERROR", "failed")])
+def test_late_controller_stop_confirms_an_inferred_stop(late_state, outcome):
+    h = Harness()
+    h.ready_inspection(count=2)
+    a = h.press()                                      # transition 1
+    h.results(a, 2)
+    b = str(uuid.uuid4())
+    h.transition(b, "SCANNING", seq=3)                 # A's stop (seq 2) is late: gap now
+    assert h.repo.scan(a)["stop_state"] == "UNCONFIRMED"
+    assert any(al["code"] == "transition_gap" for al in h.engine.alerts)
+    h.transition(a, late_state, seq=2)                 # arrives after B's start (stale seq)
+    assert h.repo.scan(a)["stop_state"] == late_state
+    h.seq = 3
+    h.close(a, stop_state=late_state)
+    h.finalize(a)
+    assert h.scan(a)["analysis"] == outcome
+    assert h.repo.audit_events("stop_confirmed_late")
+
+
+def test_redelivery_counts_as_duplicate_only_if_identical():
+    h = Harness()
+    h.ready_inspection(count=2)
+    sid = h.press()
+    h.result(sid, seq=0, fid=1, y_mm=15.0)
+    h.result(sid, seq=0, fid=1, y_mm=15.0)             # identical: ignored
+    assert h.scan(sid)["analysis"] == "pending" and h.scan(sid)["detected_target_count"] == 1
+    h.result(sid, seq=0, fid=1, y_mm=99.0)             # same seq and id, different position
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and "different content" in v["analysis_error"]
+    assert v["features"][0]["y_mm"] == 15.0            # the stored result is not overwritten

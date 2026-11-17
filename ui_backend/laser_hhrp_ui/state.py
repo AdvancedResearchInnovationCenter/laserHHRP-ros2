@@ -23,6 +23,7 @@ from .models import Acquisition, Analysis, Decision, Mode, Screen
 
 ACQUIRING = (Acquisition.SCANNING.value, Acquisition.PAUSED.value)
 HW_ACQUIRING = ("SCANNING", "PAUSED")
+UNCONFIRMED = "UNCONFIRMED"   # stop inferred from the next scan's start, not confirmed by the controller
 PREVIEW_NOTICE = ("Preview: live detections are shown but not recorded. Scan identity and analysis "
                   "completion arrive in Phase 3.")
 PREVIEW_FEATURE_LIMIT = 1000
@@ -325,7 +326,8 @@ class Engine:
     def _on_transition(self, e: ScanTransition) -> None:
         last = self.last_transition.get(e.controller_instance_id)
         if last is not None and e.transition_seq <= last:
-            return                                            # duplicate or stale delivery
+            self._late_stop_confirmation(e)                   # a stop delivered after the next start
+            return                                            # otherwise duplicate or stale delivery
         if last is not None and e.transition_seq != last + 1:
             self._alert("transition_gap", f"Missed {e.transition_seq - last - 1} scan transition(s)", e.scan_id)
         self.last_transition[e.controller_instance_id] = e.transition_seq
@@ -333,7 +335,8 @@ class Engine:
         if e.state == "SCANNING":
             if scan is None:
                 for other in self.repo.scans_where("acquisition IN ('scanning', 'paused')"):
-                    self._end_acquisition(other, Acquisition.ENDED, "UNKNOWN",
+                    # inferred, not confirmed: it can never complete on this evidence alone
+                    self._end_acquisition(other, Acquisition.ENDED, UNCONFIRMED,
                                           "stop transition missing; ended by the next scan start")
                 self._start_scan(e)
             elif scan["acquisition"] == Acquisition.PAUSED.value:
@@ -350,8 +353,24 @@ class Engine:
             if scan["acquisition"] in ACQUIRING:
                 acq = Acquisition.ERROR if e.state == "ERROR" else Acquisition.ENDED
                 self._end_acquisition(scan, acq, e.state, e.message or None)
+            elif scan["stop_state"] == UNCONFIRMED:
+                self._late_stop_confirmation(e)
         else:
             self._audit("unknown_transition_state", scan_id=e.scan_id, state=e.state)
+
+    def _late_stop_confirmation(self, e: ScanTransition) -> None:
+        """The controller's own stop transition for a scan whose stop was only inferred: record it as the
+        confirmed acquisition outcome (ERROR stays an error) and re-check completion."""
+        if e.state not in ("IDLE", "ERROR"):
+            return
+        scan = self.repo.scan(e.scan_id)
+        if scan is None or scan["stop_state"] != UNCONFIRMED:
+            return
+        acq = Acquisition.ERROR if e.state == "ERROR" else Acquisition.ENDED
+        note = "stop confirmed late by the controller" + (f": {e.message}" if e.message else "")
+        self.repo.update_scan(e.scan_id, acquisition=acq.value, stop_state=e.state, acquisition_note=note)
+        self._audit("stop_confirmed_late", scan_id=e.scan_id, state=e.state, transition_seq=e.transition_seq)
+        self._try_complete(e.scan_id)
 
     def _start_scan(self, e: ScanTransition) -> None:
         op, insp = self.operator, self.inspection
@@ -428,10 +447,10 @@ class Engine:
             self._fail(e.scan_id, f"invalid detector result #{e.result_seq}: {err}")
             return
         if not self.repo.add_feature(e.scan_id, e.detector_mode, e.result_seq, feature, e.detail, self._now()):
-            same = [f for f in self.repo.features_of(e.scan_id) if f["result_seq"] == e.result_seq]
-            if not (same and same[0]["feature_id"] == e.feature_id):
-                self._fail(e.scan_id, f"conflicting detector result #{e.result_seq} (feature {e.feature_id})")
-            return                                            # exact duplicate delivery: idempotent
+            if not self.repo.same_feature(e.scan_id, e.detector_mode, e.result_seq, feature, e.detail):
+                self._fail(e.scan_id, f"conflicting detector result #{e.result_seq} (feature {e.feature_id}): "
+                                      f"same sequence or feature id with different content")
+            return                                            # identical redelivery: idempotent
         c = self.repo.feature_counts(e.scan_id)
         feature["result_seq"] = e.result_seq
         self.emit("feature_detected", {**feature, "detected_target_count": c["targets"],
@@ -452,6 +471,8 @@ class Engine:
         self.repo.update_scan(e.scan_id, published_frame_count=e.frame_count)
         if e.error:
             self._audit("stream_closed_error", scan_id=e.scan_id, error=e.error)
+            self._fail(e.scan_id, f"frame stream closed with error: {e.error}")
+            return
         self._try_complete(e.scan_id)
 
     def _on_finalized(self, e: DetectionFinalized) -> None:
@@ -496,6 +517,12 @@ class Engine:
                                        f"detector {f.detected_target_count}")
         if scan["acquisition"] == Acquisition.ERROR.value:
             return self._fail(scan_id, f"acquisition stopped by error{': ' + scan['acquisition_note'] if scan['acquisition_note'] else ''}")
+        if scan["stop_state"] == UNCONFIRMED:
+            return self._fail(scan_id, "acquisition stop not confirmed: the controller's stop transition is "
+                                       "missing (the stop was inferred from the next scan's start)")
+        if c.stop_state != scan["stop_state"]:
+            return self._fail(scan_id, f"stop state mismatch: controller {scan['stop_state']}, "
+                                       f"frame stream {c.stop_state}")
         expected = scan["expected_count"]
         mismatch = None if expected is None else int(counts["targets"] != expected)
         scan = self.repo.update_scan(scan_id, analysis=Analysis.COMPLETE.value,

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".test-out",
+    "module": "CommonJS",
+    "moduleResolution": "Node10",
+    "target": "ES2020",
+    "types": [],
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": ["tests", "src/state/snapshotSync.ts", "src/api/types.ts"]
+}

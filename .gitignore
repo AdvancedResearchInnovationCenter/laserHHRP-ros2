@@ -12,3 +12,6 @@ hole_detector/hole_detector_out/
 # operator UI frontend
 ui_web/node_modules/
 ui_web/dist/
+
+# frontend test build
+ui_web/.test-out/

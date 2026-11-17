@@ -118,3 +118,16 @@ What the first runs exposed, and what was fixed (so the result is not a first-tr
 
 Limits: mutations only show the tests catch *these* bugs. They do not prove the absence of others, nor
 anything about ROS, the Pi or the detectors (Phases 2–5).
+
+## Code review of `3d7f52e` (fixed in a follow-up commit)
+
+An external review found five issues; all were confirmed in the code and fixed with regression tests that
+**fail on the old code** (checked) and pass now. The mutation check grew to **22/22**.
+
+| Finding | Fix | Regression test / planted bug |
+| --- | --- | --- |
+| P1 stream-close error could still complete | error fails the scan; stream stop state must equal the controller's | `test_stream_close_error_fails_even_when_counts_match`, `test_stream_stop_state_must_match_the_controller` |
+| P1 missed stop treated as a normal end | inferred stop is `UNCONFIRMED` and never completes; a late controller stop confirms it | `test_inferred_stop_never_completes`, `test_late_controller_stop_confirms_an_inferred_stop[IDLE/ERROR]` |
+| P2 frontend could stay stale | `SnapshotSync`: queue a refresh during an in-flight one; refetch an outdated response | `ui_web/tests/snapshotSync.test.ts` (`npm test`) |
+| P2 baseline runner ignored failures | exit 1 failed / 3 incomplete (SKIP/NODATA) / 0 all passed, final verdict | checked with a fake test file; laptop verdict: INCOMPLETE (missing bags) |
+| P2 duplicate check by id only | identical sequence, id, kind, position and detail required | `test_redelivery_counts_as_duplicate_only_if_identical` |

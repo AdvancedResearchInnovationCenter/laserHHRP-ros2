@@ -46,7 +46,7 @@ with FastAPI 0.101. The apt versions are **not yet tested on the Pi** (Phase 5).
 ## Tests
 
 ```bash
-cd ui_backend && python3 -m pytest -q test/        # 88 tests, ~15 s
+cd ui_backend && python3 -m pytest -q test/        # 94 tests, ~15 s
 colcon test --packages-select laser_hhrp_ui           # same tests via colcon
 ```
 
@@ -81,6 +81,11 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
   0..n‑1 is **committed to SQLite**, and the backend's target count equals the detector's.
   Otherwise the scan is pending (watchdog: warning at 10 s, failure at 120 s) or failed with a reason.
   Reaching the expected count never completes or stops anything.
+- **Stop evidence:** a scan completes only on the controller's confirmed stop. A stop inferred from the next
+  scan's start is `UNCONFIRMED` and fails ("stop not confirmed") unless the controller's own stop for it
+  arrives late; a frame-stream close with an error, or whose stop state differs from the controller's,
+  fails the analysis. A redelivered result counts as a duplicate only if it is identical (sequence, feature
+  id, kind, position and detector detail); otherwise the scan fails as a conflict.
 - **Never invented:** measurements are always `not_measured` (both detectors send -1), `passed` is
   ignored, `partial` comes only from the detector's `detail.partial`, and a hardware `ERROR` stop fails
   analysis. Restart turns unfinished scans into `interrupted`.

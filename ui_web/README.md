@@ -9,6 +9,7 @@ Phase 4.
 npm ci                       # pinned versions from package-lock.json (Node >= 18.17)
 npm run dev                  # http://127.0.0.1:5173, proxies /api and /ws to 127.0.0.1:8080
 npm run build                # typecheck + dist/ (served by the backend with --static)
+npm test                     # SnapshotSync regression tests (no extra dependencies)
 ```
 
 Start the backend first: `cd ../ui_backend && python3 -m laser_hhrp_ui.server --mock`. In mock mode a

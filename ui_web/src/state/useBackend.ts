@@ -1,37 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Envelope, Feature, Snapshot } from "../api/types";
+import { SnapshotSync } from "./snapshotSync";
 
 // Live backend state. The backend snapshot is authoritative: on connect / reconnect we take a fresh
 // snapshot; afterwards feature_detected is applied incrementally and every other event triggers a
-// snapshot refetch. event_seq makes repeated delivery harmless.
+// snapshot refresh (SnapshotSync: never stale after the last event, duplicates ignored by event_seq).
 export function useBackend() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [connected, setConnected] = useState(false);
-  const seq = useRef(0);
-  const refetching = useRef(false);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
     let closed = false;
     let retry = 500;
     let timer: number | undefined;
-
-    const refetch = async () => {
-      if (refetching.current) return;
-      refetching.current = true;
-      try {
-        const r = await fetch("/api/v1/state");
-        if (r.ok) {
-          const s = (await r.json()) as Snapshot;
-          if ((s.event_seq ?? 0) >= seq.current) {
-            seq.current = s.event_seq ?? seq.current;
-            setSnap(s);
-          }
-        }
-      } finally {
-        refetching.current = false;
-      }
-    };
+    const sync = new SnapshotSync(async () => {
+      const r = await fetch("/api/v1/state");
+      return r.ok ? ((await r.json()) as Snapshot) : null;
+    }, setSnap);
 
     const connect = () => {
       const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -44,17 +30,11 @@ export function useBackend() {
       ws.onmessage = (m) => {
         const env = JSON.parse(m.data) as Envelope;
         if (env.type === "snapshot") {
-          seq.current = env.event_seq;
-          setSnap(env.payload as Snapshot);
+          sync.snapshot(env.payload as Snapshot, env.event_seq);
           return;
         }
-        if (env.event_seq <= seq.current) return;         // duplicate / already in the snapshot
-        seq.current = env.event_seq;
-        if (env.type === "feature_detected" && (env.payload as { preview?: boolean }).preview) {
-          void refetch();                                 // preview: small, refetch keeps it exact
-          return;
-        }
-        if (env.type === "feature_detected") {
+        if (!sync.accept(env.event_seq)) return;          // duplicate / already in the snapshot
+        if (env.type === "feature_detected" && !(env.payload as { preview?: boolean }).preview) {
           const f = env.payload as Feature & { detected_target_count: number; non_target_count: number };
           setSnap((s) => {
             const cur = s?.current_scan;
@@ -66,11 +46,11 @@ export function useBackend() {
           });
           return;
         }
-        void refetch();
+        void sync.refresh();                              // everything else, including preview detections
       };
     };
     connect();
-    return () => { closed = true; window.clearTimeout(timer); ws?.close(); };
+    return () => { closed = true; sync.stop(); window.clearTimeout(timer); ws?.close(); };
   }, []);
 
   return { snap, connected };

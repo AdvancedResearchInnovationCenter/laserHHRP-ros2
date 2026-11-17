@@ -280,6 +280,15 @@ class Repository:
         except sqlite3.IntegrityError:
             return False
 
+    def same_feature(self, scan_id: str, detector_mode: str, result_seq: int, feature: dict, detail: dict) -> bool:
+        """True only if the stored result with this sequence is identical (identity, geometry, detail)."""
+        r = self._one("SELECT * FROM features WHERE scan_id = ? AND result_seq = ?", scan_id, result_seq)
+        return bool(r) and (
+            r["detector_mode"] == detector_mode and r["feature_id"] == feature["feature_id"]
+            and r["kind"] == feature["kind"]
+            and (r["x_mm"], r["y_mm"], r["z_mm"]) == (feature["x_mm"], feature["y_mm"], feature["z_mm"])
+            and r["detail_json"] == json.dumps(detail, sort_keys=True))
+
     def features_of(self, scan_id: str) -> list[dict]:
         rows = self._all("SELECT * FROM features WHERE scan_id = ? ORDER BY result_seq", scan_id)
         out = []
