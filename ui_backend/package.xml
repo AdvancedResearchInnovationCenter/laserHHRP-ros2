@@ -8,6 +8,10 @@
   <exec_depend>python3-fastapi</exec_depend>
   <exec_depend>python3-uvicorn</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>laser_hhrp</exec_depend>
+  <exec_depend>hole_detector</exec_depend>
+  <exec_depend>rivet_detector</exec_depend>
   <test_depend>python3-pytest</test_depend>
   <test_depend>python3-httpx</test_depend>
   <export><build_type>ament_python</build_type></export>

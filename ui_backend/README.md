@@ -2,28 +2,41 @@
 
 ROS 2 `ament_python` package. It holds the authoritative inspection state, keeps the canonical
 history in SQLite, and serves the HTTP/WebSocket API used by the browser UI ([../ui_web](../ui_web)).
-Contract: [plan.md](../plan.md). Status: **Phase 1**. It runs on the mock ROS source; the live ROS bridge
-and detector supervisor come in Phase 2, and the tagged ROS messages in Phase 3.
+Contract: [plan.md](../plan.md). Status: **Phase 2**. It runs on live ROS (read-only bridge, one supervised
+detector) or on the mock source. Live detections are a **preview**: shown, never recorded or acceptable,
+until Phase 3 adds tagged scan identity and finalization.
 
 ## Run
 
 ```bash
-cd ui_backend
-python3 -m laser_hhrp_ui.server --mock                         # API on http://127.0.0.1:8080
-python3 -m laser_hhrp_ui.server --mock --static ../ui_web/dist # also serve the built frontend
-# or, after colcon build:  ros2 run laser_hhrp_ui server --mock
+# live ROS: start the core WITHOUT detectors or RViz; the backend runs the selected detector itself
+ros2 launch laser_hhrp hhrp.launch.py holes:=false ui:=false        # add simulate:=true without hardware
+ros2 run laser_hhrp_ui server --static ui_web/dist                   # http://127.0.0.1:8080
+
+# no ROS at all
+cd ui_backend && python3 -m laser_hhrp_ui.server --mock --static ../ui_web/dist
 ```
+
+For a service (Phase 5), start the installed `lib/laser_hhrp_ui/server` directly: the `ros2 run` wrapper
+does not forward SIGTERM and would leave the server, and its detector, running.
 
 | Option | Default | |
 | --- | --- | --- |
 | `--db` | `$XDG_DATA_HOME/laser_hhrp/ui/inspections.db` (`~/.local/share/...`) | SQLite file, never in the Git checkout |
 | `--host` / `--port` | `127.0.0.1` / `8080` | local only by default |
-| `--mock`, `--mock-speed` | off, 1.0 | mock ROS source and its time scale |
+| `--mock`, `--mock-speed` | off, 1.0 | mock ROS source and its time scale (instead of live ROS) |
+| `--no-ros` | off | neither mock nor ROS: API only, never Ready |
+| `--data-root` | next to `--db` | `detector-output/<inspection_uuid>/` and `logs/` (detector logs, pidfile) |
 | `--analysis-warn-s` / `--analysis-fail-s` | 10 / 120 | watchdog after switch release |
 | `--static` | installed `share/laser_hhrp_ui/web` if present | built frontend |
 
-Without `--mock` the backend runs, but it shows **Not ready: ROS bridge not running**, since nothing
-feeds it hardware state yet (Phase 2).
+**Live ROS (Phase 2).** `ros_bridge.py` subscribes read-only to `scan/status`, `laser/status`, `nano/status`,
+`scan/storage` and `inspection/result`; it never publishes or calls a service. `detector_supervisor.py` runs
+`hole_detector` (CSK Depth) or `rivet_detector` (Rivet Flushness), never both, with the package's own
+`params.yaml` and a fixed argv. Ready requires the process **and** its node subscribing `/scan/frame` and
+publishing `/inspection/result`. A detector node the UI did not start (core launched with `holes:=true`)
+or a second one makes the state Not ready; a crash is reported with its exit code and restarted only
+through `POST /api/v1/detector/restart`.
 
 **Dependencies:** FastAPI, Uvicorn (rosdep keys `python3-fastapi`, `python3-uvicorn`); tests also need
 pytest and httpx. Request bodies are validated in plain Python (`models.py`), so the code does not
@@ -33,7 +46,7 @@ with FastAPI 0.101. The apt versions are **not yet tested on the Pi** (Phase 5).
 ## Tests
 
 ```bash
-cd ui_backend && python3 -m pytest -q test/        # 70 tests, ~5 s
+cd ui_backend && python3 -m pytest -q test/        # 88 tests, ~15 s
 colcon test --packages-select laser_hhrp_ui           # same tests via colcon
 ```
 
@@ -42,6 +55,12 @@ colcon test --packages-select laser_hhrp_ui           # same tests via colcon
 - `test_api.py`: HTTP + WebSocket through FastAPI's TestClient with the mock source.
 - `test_mock_scenarios.py`: every mock scenario end to end at 40× speed.
 - `test_models_repository.py`: validation, the detector-result contract, schema/WAL/constraints.
+- `test_preview_bridge.py`: Phase 2 preview (nothing persisted) and the bridge's message conversions.
+- `test_supervisor.py`: the supervisor with real processes and signals (fake detector executables).
+
+Live check against the simulated core, real detectors and the real ROS graph (30 checks, ~45 s; isolated
+ROS domain, scratch HOME): `tools/ui_verify/phase2_ros_check.sh` (see
+[VERIFY_PHASE2.md](../docs/operator_ui/VERIFY_PHASE2.md)).
 
 To check that the tests catch real bugs: `python3 ../tools/ui_verify/mutation_check.py` (see
 [VERIFY_PHASE1.md](../docs/operator_ui/VERIFY_PHASE1.md)).
@@ -80,6 +99,7 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
 | `GET /api/v1/inspections` | | recent inspections |
 | `POST /api/v1/inspections/{uuid}/end` | | 409 while acquiring/analysing; idempotent |
 | `PATCH /api/v1/inspections/{uuid}/next-expected-count` | `{count}` | 1..500, only on Ready / Not ready |
+| `POST /api/v1/detector/restart` | | explicit recovery after a detector crash or failed start |
 | `GET /api/v1/inspections/{uuid}/scans` | | history, oldest first |
 | `GET /api/v1/scans/{scan_id}` | | scan with features |
 | `POST /api/v1/scans/{scan_id}/decision` | `{decision: accept\|rescan}` | completed analyses only (including earlier undecided scans); idempotent |
@@ -113,8 +133,9 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
 - A scan started without an operator, an open inspection or a ready detector is stored as
   `unassigned` with the reason and an alert; its results are never attributed.
 
-## Not in Phase 1
+## Not yet
 
-Live ROS bridge and detector process supervisor (Phase 2); tagged ROS messages, real finalization and
-replay for Retry (Phase 3); CSV/USB export and the designed screens (Phase 4); Pi/apt validation
-(Phase 5). The mock-driven tests are timing based and verified on an x86 laptop only.
+Tagged ROS messages, real finalization, recorded live scans and replay for Retry (Phase 3); CSV/USB export
+and the designed screens (Phase 4); Pi/apt validation (Phase 5). Phase 2 cannot tell whether a detector
+still has pending results when an inspection ends (no finalization yet); the detector is stopped with
+SIGINT, which makes it flush its result files. Everything is verified on an x86 laptop (Humble) only.

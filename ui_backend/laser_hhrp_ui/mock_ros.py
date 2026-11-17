@@ -94,7 +94,7 @@ class MockRos:
         self.submit(self.hardware_status())
 
     # ---- detector supervisor (DetectorControl interface) ----
-    def request(self, mode: Mode) -> None:
+    def request(self, mode: Mode, inspection_uuid: str | None = None) -> None:
         self.mode, self.detector_alive = mode, False
         self.submit(DetectorStatus(mode=mode.value, alive=True, ready=False))
 

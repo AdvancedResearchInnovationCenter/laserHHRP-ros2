@@ -35,6 +35,7 @@ export const api = {
   failureAction: (scanId: string, action: "retry" | "rescan" | "keep_incomplete") =>
     call("POST", `/scans/${scanId}/failure-action`, { action }),
   scans: (uuid: string) => call("GET", `/inspections/${uuid}/scans`),
+  restartDetector: () => call("POST", "/detector/restart"),
   // mock-only developer controls (404 unless the backend runs with --mock)
   mock: {
     press: () => call("POST", "/dev/mock/press"),

@@ -1,5 +1,6 @@
 """HTTP + WebSocket API driven by the mock ROS source (plan sections 7, 11)."""
 
+import re
 import time
 
 import pytest
@@ -142,7 +143,8 @@ def test_no_scan_control_without_mock(tmp_path):
     with TestClient(app) as client:
         assert client.post(P + "/dev/mock/press").status_code in (404, 405)
         paths = {getattr(r, "path", "") for r in app.routes}
-        assert not any("press" in p or "start" in p or "stop" in p for p in paths)
+        scan_control = re.compile(r"press|release|scan[^/]*/[^/]*/?(start|stop|pause)|/scan/(start|stop|pause)")
+        assert not [p for p in paths if scan_control.search(p)]
         client.post(P + "/operator", json={"operator_id": "op"})
         client.post(P + "/inspections", json={"mode": "csk_depth"})
         s = state(client)

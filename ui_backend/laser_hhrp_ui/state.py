@@ -17,11 +17,15 @@ from dataclasses import dataclass
 
 from . import models
 from .clock import Clock, iso
-from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, ScanTransition, StreamClosed,
-                     TaggedResult)
+from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, ScanTransition,
+                     StreamClosed, TaggedResult)
 from .models import Acquisition, Analysis, Decision, Mode, Screen
 
 ACQUIRING = (Acquisition.SCANNING.value, Acquisition.PAUSED.value)
+HW_ACQUIRING = ("SCANNING", "PAUSED")
+PREVIEW_NOTICE = ("Preview: live detections are shown but not recorded. Scan identity and analysis "
+                  "completion arrive in Phase 3.")
+PREVIEW_FEATURE_LIMIT = 1000
 MIN_FREE_MB = 500.0
 
 
@@ -42,7 +46,7 @@ class ScanRuntime:
 class NullDetectorControl:
     """Phase 1 placeholder; Phase 2 supplies the process supervisor, the mock supplies a fake."""
 
-    def request(self, mode: Mode) -> None:
+    def request(self, mode: Mode, inspection_uuid: str | None = None) -> None:
         pass
 
     def stop(self) -> None:
@@ -73,6 +77,8 @@ class Engine:
         self.alerts: list[dict] = []              # sticky operator-visible system alerts
         self._last_ready_key = None
         self._last_progress_mono = 0.0
+        self.preview: dict | None = None          # Phase 2: live view of the current physical scan
+        self.preview_count = 0
         self._recover()
 
     # ------------------------------------------------------------------ helpers
@@ -118,7 +124,7 @@ class Engine:
         """After restart: the open inspection needs its detector again."""
         insp = self.inspection
         if insp:
-            self.detector_control.request(Mode(insp["mode"]))
+            self.detector_control.request(Mode(insp["mode"]), insp["uuid"])
 
     # ------------------------------------------------------------------ readiness and screen
     def hardware_fresh(self) -> bool:
@@ -175,6 +181,8 @@ class Engine:
         insp = self.inspection
         if not insp:
             return Screen.SETUP
+        if self.preview_mode and self.hardware_fresh() and self.hardware.scan_state in HW_ACQUIRING:
+            return Screen.SCANNING
         s = self.repo.latest_scan_of(insp["uuid"])
         if s:
             if s["acquisition"] in ACQUIRING:
@@ -265,6 +273,8 @@ class Engine:
             "current_scan": self.scan_view(current, features=True) if current else None,
             "recent_scans": [self.scan_view(s) for s in history],
             "pending_scans": [self.scan_view(s) for s in self.repo.scans_where("analysis = 'pending'")],
+            "preview": self.preview_view(),
+            "preview_notice": PREVIEW_NOTICE if self.preview_mode else None,
         }
 
     # ------------------------------------------------------------------ emit helpers
@@ -299,6 +309,8 @@ class Engine:
             self._on_hardware(e)
         elif isinstance(e, DetectorStatus):
             self._on_detector(e)
+        elif isinstance(e, LegacyResult):
+            self._on_legacy_result(e)
         else:
             raise TypeError(f"unknown event {type(e).__name__}")
 
@@ -507,7 +519,10 @@ class Engine:
         self._emit_system()
 
     def _on_hardware(self, e: HardwareStatus) -> None:
+        prev = self.hardware
         self.hardware, self.hardware_mono = e, self.clock.monotonic()
+        if self.preview_mode:
+            self._preview_transition(prev.scan_state if prev else None, e)
         self._emit_system(force=False)
         insp = self.inspection
         now = self.clock.monotonic()
@@ -529,6 +544,94 @@ class Engine:
         if e.ready:
             self.clear_alert("detector_stopped")
         self._emit_system()
+
+    # ------------------------------------------------------------------ Phase 2 preview
+    @property
+    def preview_mode(self) -> bool:
+        """Live ROS without tagged identity: show, never persist or accept (plan Phase 2)."""
+        return self.source == "ros"
+
+    def preview_view(self) -> dict | None:
+        p = self.preview
+        if p is None:
+            return None
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in p.items()}
+
+    def _preview_transition(self, prev_state: str | None, e: HardwareStatus) -> None:
+        was, now = prev_state in HW_ACQUIRING, e.scan_state in HW_ACQUIRING
+        if now and not was:
+            insp = self.inspection
+            reason = None
+            if not self.operator:
+                reason = "no operator identified"
+            elif not insp:
+                reason = "no open inspection"
+            elif self.detector.mode != insp["mode"] or not self.detector.ready:
+                reason = "detector not ready"
+            self.preview_count += 1
+            self.preview = {
+                "number": self.preview_count, "inspection_uuid": insp["uuid"] if insp and not reason else None,
+                "mode": insp["mode"] if insp and not reason else None, "scanning": True,
+                "started_at": self._now(), "ended_at": None, "stop_state": None,
+                "expected_count": insp["next_expected_count"] if insp and not reason else None,
+                "detected_target_count": 0, "non_target_count": 0, "partial_target_count": 0,
+                "ignored_results": 0, "distance_mm": 0.0, "unassigned_reason": reason, "features": []}
+            if reason:
+                self._alert("unassigned_scan", f"Scan started but not shown for an inspection: {reason}")
+            else:
+                self.clear_alert("unassigned_scan")
+            self.emit("scan_progress", {"phase": "started", "preview": True, **self.preview_view()},
+                      inspection_id=self.preview["inspection_uuid"])
+        elif was and not now and self.preview is not None:
+            self.preview.update(scanning=False, ended_at=self._now(), stop_state=e.scan_state)
+            self.emit("scan_acquisition_ended", {"preview": True, **self.preview_view()},
+                      inspection_id=self.preview["inspection_uuid"])
+        if now and self.preview is not None:
+            self.preview["distance_mm"] = round(e.position_m * 1000.0, 1)
+        if was != now:
+            self._emit_system()
+
+    def _on_legacy_result(self, e: LegacyResult) -> None:
+        p = self.preview
+        if not self.preview_mode or p is None or p["mode"] is None:
+            self._audit("legacy_result_ignored", reason="no previewed scan" if self.preview_mode else "not in preview mode",
+                        feature_type=e.feature_type)
+            return
+        m = Mode(p["mode"])
+        try:
+            fid = int(e.detail.get("id"))
+            feature = models.feature_from_result(m, e.feature_type, fid, e.position_m, e.detail)
+        except (models.ValidationError, TypeError, ValueError):
+            p["ignored_results"] += 1                    # e.g. another mode's detector publishing
+            return
+        if any(f["feature_id"] == fid and f["kind"] == feature["kind"] for f in p["features"]) \
+                or len(p["features"]) >= PREVIEW_FEATURE_LIMIT:
+            return
+        feature["result_seq"] = len(p["features"])
+        feature["after_release"] = not p["scanning"]
+        p["features"].append(feature)
+        if feature["is_target"]:
+            p["detected_target_count"] += 1
+            p["partial_target_count"] += int(feature["partial"])
+        else:
+            p["non_target_count"] += 1
+        self.emit("feature_detected", {**feature, "preview": True, "preview_number": p["number"],
+                                       "detected_target_count": p["detected_target_count"],
+                                       "non_target_count": p["non_target_count"],
+                                       "expected_count": p["expected_count"]},
+                  inspection_id=p["inspection_uuid"])
+
+    def restart_detector(self) -> dict:
+        """Explicit recovery after a detector crash or startup failure (plan section 6)."""
+        insp = self.inspection
+        if not insp:
+            raise CommandError(409, "no_inspection", "No open inspection")
+        if self.detector.mode == insp["mode"] and self.detector.alive and self.detector.ready:
+            return self.snapshot()
+        op = self.operator
+        self._audit("detector_restart", inspection_uuid=insp["uuid"], actor=op["operator_id"] if op else None)
+        self.detector_control.request(Mode(insp["mode"]), insp["uuid"])
+        return self.snapshot()
 
     def ingress_overflow(self, dropped: int) -> None:
         """Events were dropped between ROS and the engine: pending results may be incomplete."""
@@ -624,7 +727,7 @@ class Engine:
             create_request_id=request_id)
         self._audit("inspection_created", inspection_uuid=insp["uuid"], actor=op["operator_id"],
                     label=label, mode=m.value)
-        self.detector_control.request(m)
+        self.detector_control.request(m, insp["uuid"])
         self.emit("inspection_updated", self.inspection_view(insp), inspection_id=insp["uuid"])
         self._emit_system()
         return self.inspection_view(insp)
@@ -657,6 +760,8 @@ class Engine:
             return self.inspection_view(insp)
         busy = self.repo.scans_where(
             "inspection_uuid = ? AND (analysis = 'pending' OR acquisition IN ('scanning', 'paused'))", uuid)
+        if self.preview_mode and self.hardware is not None and self.hardware.scan_state in HW_ACQUIRING:
+            busy = True
         if busy:
             raise CommandError(409, "analysis_pending", "Wait until scanning and analysis have finished")
         self.repo.update_inspection(uuid, status="closed", closed_at=self._now())

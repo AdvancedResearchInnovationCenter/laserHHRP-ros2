@@ -50,6 +50,10 @@ export function useBackend() {
         }
         if (env.event_seq <= seq.current) return;         // duplicate / already in the snapshot
         seq.current = env.event_seq;
+        if (env.type === "feature_detected" && (env.payload as { preview?: boolean }).preview) {
+          void refetch();                                 // preview: small, refetch keeps it exact
+          return;
+        }
         if (env.type === "feature_detected") {
           const f = env.payload as Feature & { detected_target_count: number; non_target_count: number };
           setSnap((s) => {

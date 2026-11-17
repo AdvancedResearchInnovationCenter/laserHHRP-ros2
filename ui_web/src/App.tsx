@@ -2,7 +2,7 @@
 // The designed operator screens (count circles, SVG results map, history) replace this in Phase 4.
 import { useState } from "react";
 import { api, type Result } from "./api/client";
-import type { Scan, Snapshot } from "./api/types";
+import type { Preview, Scan, Snapshot } from "./api/types";
 import { useBackend } from "./state/useBackend";
 
 const MODE_LABEL = { csk_depth: "CSK Depth", rivet_flushness: "Rivet Flushness" } as const;
@@ -29,6 +29,7 @@ export function App() {
       </header>
       {[...snap.alerts.map((a) => a.message), ...snap.warnings].map((w) => <div key={w} className="warn">{w}</div>)}
       {error && <div className="bad">{error}</div>}
+      {snap.preview_notice && <div className="muted small">{snap.preview_notice}</div>}
       <main><Body snap={snap} run={run} /></main>
       {snap.source === "mock" && <MockBar run={run} />}
     </div>
@@ -74,12 +75,16 @@ function Body({ snap, run }: { snap: Snapshot; run: (p: Promise<Result<unknown>>
           {snap.screen === "ready"
             ? <div className="ok big-text">Ready: hold the button to scan</div>
             : <ul className="bad">{snap.not_ready_reasons.map((r) => <li key={r}>{r}</li>)}</ul>}
+          {snap.detector.error && !snap.detector.ready &&
+            <button onClick={() => run(api.restartDetector())}>Restart detector</button>}
+          {snap.preview && <PreviewView p={snap.preview} />}
           <History scans={snap.recent_scans} run={run} />
           <button onClick={() => insp && run(api.endInspection(insp.uuid))}>End inspection</button>
         </div>
       );
     case "scanning":
     case "finishing_analysis":
+      if (snap.preview_notice && snap.preview) return <PreviewView p={snap.preview} />;
       return scan ? <Progress scan={scan} distance={snap.hardware?.distance_mm ?? 0} /> : null;
     case "results":
       return scan ? (
@@ -134,6 +139,30 @@ function Progress({ scan, distance }: { scan: Scan; distance: number }) {
       <div className="circles">
         {Array.from({ length: shown }, (_, i) => <span key={i} className={i < scan.detected_target_count ? "dot on" : "dot"} />)}
         {n > shown && <span>+{n - shown}</span>}
+      </div>
+    </div>
+  );
+}
+
+function PreviewView({ p }: { p: Preview }) {
+  const n = Math.min(Math.max(p.expected_count ?? 0, p.detected_target_count), 40);
+  return (
+    <div className="col">
+      <div className="big-text">
+        {p.scanning ? `Recording · ${p.distance_mm.toFixed(0)} mm` : "Last scan (preview, not recorded)"}:{" "}
+        {p.detected_target_count} / {p.expected_count ?? "?"}
+        {p.partial_target_count > 0 && ` (${p.partial_target_count} partial)`}
+      </div>
+      {p.unassigned_reason && <div className="warn">Not shown for an inspection: {p.unassigned_reason}</div>}
+      <div className="circles">
+        {Array.from({ length: n }, (_, i) => <span key={i} className={i < p.detected_target_count ? "dot on" : "dot"} />)}
+      </div>
+      <div className="features">
+        {p.features.map((f) => (
+          <span key={f.result_seq} className={f.is_target ? (f.partial ? "partial" : "") : "muted"}>
+            #{f.feature_id} {f.kind} ({f.x_mm.toFixed(1)}, {f.y_mm.toFixed(1)}){f.after_release ? " · after release" : ""} · Not measured
+          </span>
+        ))}
       </div>
     </div>
   );

@@ -26,3 +26,4 @@ button.big { flex: 1; min-height: 64px; font-size: 22px; background: var(--accen
 .dot.on { background: var(--ok); border-color: var(--ok); }
 table { font-size: 15px; border-collapse: collapse; } td { padding: 2px 8px; }
 td button { min-height: 36px; font-size: 14px; }
+.small { font-size: 13px; }

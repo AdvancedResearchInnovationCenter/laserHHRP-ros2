@@ -21,8 +21,9 @@ echo "repo: $REPO ($(git -C "$REPO" rev-parse --abbrev-ref HEAD) @ $(git -C "$RE
 echo "out:  $OUT    ros: $DISTRO    $(lsb_release -ds 2>/dev/null) $(uname -m)"
 
 echo "=== build"
-colcon --log-base "$OUT/log" build --base-paths "$REPO" --build-base "$OUT/build" \
-  --install-base "$OUT/install" --cmake-args -DBUILD_TESTING=ON > "$OUT/build.log" 2>&1 \
+# memory-limited (one package at a time, 2 compile jobs): a full-parallel C++ build can exhaust RAM without swap
+MAKEFLAGS="-j2" colcon --log-base "$OUT/log" build --base-paths "$REPO" --build-base "$OUT/build" \
+  --install-base "$OUT/install" --parallel-workers 1 --cmake-args -DBUILD_TESTING=ON > "$OUT/build.log" 2>&1 \
   && echo "build OK" || { echo "build FAILED (see $OUT/build.log)"; exit 1; }
 grep -i "warning" -A2 "$OUT/build.log" | grep -i "sdk" | head -2
 # shellcheck disable=SC1091

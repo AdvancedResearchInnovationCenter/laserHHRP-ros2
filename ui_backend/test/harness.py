@@ -17,7 +17,7 @@ class FakeDetectorControl:
     def __init__(self):
         self.calls = []
 
-    def request(self, mode):
+    def request(self, mode, inspection_uuid=None):
         self.calls.append(("request", mode.value))
 
     def stop(self):
@@ -28,12 +28,12 @@ class FakeDetectorControl:
 
 
 class Harness:
-    def __init__(self, path=":memory:", clock=None, repo=None, quality="synced"):
+    def __init__(self, path=":memory:", clock=None, repo=None, quality="synced", source="mock"):
         self.clock = clock or FakeClock(quality)
         self.repo = repo or Repository(path)
         self.events = []
         self.det = FakeDetectorControl()
-        self.engine = Engine(self.repo, self.clock, emit=self._emit, detector_control=self.det, source="mock")
+        self.engine = Engine(self.repo, self.clock, emit=self._emit, detector_control=self.det, source=source)
         self.ctrl, self.seq = "ctrl-1", 0
         self.next_seq = {}
 

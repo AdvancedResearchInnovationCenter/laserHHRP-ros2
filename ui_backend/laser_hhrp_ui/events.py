@@ -65,6 +65,16 @@ class DetectorStatus:
 
 
 @dataclass(frozen=True)
+class LegacyResult:
+    """Untagged /inspection/result (Phase 2 preview). Carries no scan identity, so it is shown live
+    but never persisted or attributed to a recorded scan."""
+    feature_type: str
+    position_m: tuple
+    detail: dict = field(default_factory=dict)
+    stamp_ns: int = 0
+
+
+@dataclass(frozen=True)
 class HardwareStatus:
     """Aggregated readiness from scan/status, laser/status, nano/status, scan/storage (plan section 9)."""
     scan_state: str = "IDLE"

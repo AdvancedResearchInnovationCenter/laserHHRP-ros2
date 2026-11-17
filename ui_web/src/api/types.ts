@@ -44,7 +44,17 @@ export interface Snapshot {
   detector: { mode: Mode | null; alive: boolean; ready: boolean; error: string };
   source: "none" | "mock" | "ros"; clock_quality: string;
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
+  preview: Preview | null;            // Phase 2 live view: shown, never recorded
+  preview_notice: string | null;
   event_seq?: number;
+}
+
+export interface Preview {
+  number: number; inspection_uuid: string | null; mode: Mode | null; scanning: boolean;
+  started_at: string; ended_at: string | null; stop_state: string | null; expected_count: number | null;
+  detected_target_count: number; non_target_count: number; partial_target_count: number;
+  ignored_results: number; distance_mm: number; unassigned_reason: string | null;
+  features: (Feature & { after_release: boolean })[];
 }
 
 export interface Envelope<T = unknown> {

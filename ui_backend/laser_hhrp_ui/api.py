@@ -51,7 +51,9 @@ async def _run(fn, *args, **kwargs) -> JSONResponse:
 
 
 def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = None,
-               watchdog_period_s: float = 0.5) -> FastAPI:
+               watchdog_period_s: float = 0.5, services=()) -> FastAPI:
+    """`services`: objects with blocking start()/stop() (ROS bridge, detector supervisor), started in order
+    after the ingress is bound and stopped in reverse order at shutdown."""
     tasks: list[asyncio.Task] = []
 
     @asynccontextmanager
@@ -62,10 +64,19 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         tasks.append(loop.create_task(watchdog(engine, watchdog_period_s)))
         if mock is not None:
             tasks.append(loop.create_task(mock.run()))
+        started = []
+        for svc in services:
+            await loop.run_in_executor(None, svc.start)
+            started.append(svc)
         engine.start()
         try:
             yield
         finally:
+            for svc in reversed(started):
+                try:
+                    await loop.run_in_executor(None, svc.stop)
+                except Exception:
+                    log.exception("stopping %s failed", type(svc).__name__)
             for t in tasks + list(getattr(mock, "tasks", ())):
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -123,6 +134,10 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         except models.ValidationError as e:
             return _error(400, "invalid", e.message, e.field)
         return await _run(engine.set_next_expected_count, uuid, body.get("count"))
+
+    @app.post(P + "/detector/restart")
+    async def restart_detector():
+        return await _run(engine.restart_detector)
 
     @app.get(P + "/inspections/{uuid}/scans")
     async def inspection_scans(uuid: str):
