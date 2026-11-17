@@ -1,0 +1,28 @@
+/* Phase 1 scaffold styles; Phase 4 designs the real 800 x 480 screens. */
+:root {
+  --bg: #101418; --fg: #e8edf2; --muted: #8796a5; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+  --panel: #1b222a; --accent: #2f81f7;
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+.frame { width: 800px; height: 480px; overflow: hidden; display: flex; flex-direction: column; padding: 8px 12px; gap: 6px; }
+.center { align-items: center; justify-content: center; }
+header { display: flex; gap: 16px; align-items: baseline; }
+header span:last-child { margin-left: auto; }
+main { flex: 1; overflow: auto; }
+footer { display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--panel); padding-top: 6px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; }
+button, select, input { min-height: 48px; font-size: 18px; border-radius: 6px; border: 1px solid #30363d; background: var(--panel); color: var(--fg); padding: 0 14px; }
+button.big { flex: 1; min-height: 64px; font-size: 22px; background: var(--accent); border: none; }
+.big-text { font-size: 22px; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .muted { color: var(--muted); }
+.partial { color: var(--warn); }
+.features { display: flex; flex-direction: column; font-size: 14px; max-height: 220px; overflow: auto; }
+.circles { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dot { width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--muted); }
+.dot.on { background: var(--ok); border-color: var(--ok); }
+table { font-size: 15px; border-collapse: collapse; } td { padding: 2px 8px; }
+td button { min-height: 36px; font-size: 14px; }

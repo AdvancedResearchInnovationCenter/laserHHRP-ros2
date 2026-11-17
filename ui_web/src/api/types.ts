@@ -1,0 +1,55 @@
+// Backend contract v1 (ui_backend/laser_hhrp_ui/api.py, state.py). The backend is authoritative;
+// the frontend never derives lifecycle, counts or target filtering itself.
+
+export type Screen =
+  | "identify" | "setup" | "not_ready" | "ready" | "scanning"
+  | "finishing_analysis" | "results" | "analysis_failed";
+
+export type Mode = "csk_depth" | "rivet_flushness";
+
+export interface Measurement { name: string; value_mm: number | null; unit: string; status: "not_measured" | "measured" | "invalid" }
+
+export interface Feature {
+  feature_id: number; result_seq: number; kind: string; is_target: boolean;
+  x_mm: number; y_mm: number; z_mm: number; diameter_mm: number | null; partial: boolean;
+  quality: { coverage: number | null; scanned_share: number | null; rms_mm: number | null };
+  measurement: Measurement;
+}
+
+export interface Scan {
+  scan_id: string; scan_number: number | null; display_name: string; inspection_uuid: string | null;
+  mode: Mode | null; operator_id: string | null; expected_count: number | null;
+  detected_target_count: number; non_target_count: number; partial_target_count: number;
+  count_mismatch: boolean | null; acquisition: string; acquisition_note: string | null;
+  analysis: "pending" | "complete" | "failed" | "interrupted"; analysis_error: string | null;
+  decision: string | null; status: string; unassigned_reason: string | null;
+  started_at: string; ended_at: string | null; clock_quality: string; frame_count: number | null;
+  replay_eligible: boolean; features?: Feature[];
+}
+
+export interface Inspection {
+  uuid: string; label: string; mode: Mode; status: "open" | "closed"; operator_id: string;
+  next_expected_count: number | null; created_at: string; closed_at: string | null;
+  clock_quality: string; scan_count: number;
+}
+
+export interface Alert { code: string; message: string; scan_id: string | null; at: string }
+
+export interface Snapshot {
+  screen: Screen;
+  operator: { operator_id: string; started_at: string } | null;
+  inspection: Inspection | null;
+  ready: boolean; not_ready_reasons: string[]; warnings: string[]; alerts: Alert[];
+  hardware: { fresh: boolean; distance_mm: number; scan_state: string } | null;
+  detector: { mode: Mode | null; alive: boolean; ready: boolean; error: string };
+  source: "none" | "mock" | "ros"; clock_quality: string;
+  current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
+  event_seq?: number;
+}
+
+export interface Envelope<T = unknown> {
+  version: number; event_seq: number; type: string; timestamp: string;
+  inspection_id: string | null; scan_id: string | null; payload: T;
+}
+
+export interface ApiError { code: string; message: string; field: string | null }

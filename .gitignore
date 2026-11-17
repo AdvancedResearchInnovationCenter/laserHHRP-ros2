@@ -8,3 +8,7 @@ hole_detector/hole_detector_out/
 *.ply
 *.csv
 
+
+# operator UI frontend
+ui_web/node_modules/
+ui_web/dist/
