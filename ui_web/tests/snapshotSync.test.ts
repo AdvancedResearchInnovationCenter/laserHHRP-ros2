@@ -1,16 +1,8 @@
-// SnapshotSync regression tests (code review finding 3). No test framework or Node types: compiled by tsc.
-//   npm test
+// SnapshotSync regression tests (code review finding 3).
 import { SnapshotSync } from "../src/state/snapshotSync";
 import type { Snapshot } from "../src/api/types";
 
-declare const process: { exit(code: number): never };
-const assert = {
-  ok(v: unknown, msg = "expected true") { if (!v) throw new Error(msg); },
-  equal(a: unknown, b: unknown, msg?: string) { if (a !== b) throw new Error(msg ?? `${String(a)} !== ${String(b)}`); },
-  deepEqual(a: unknown, b: unknown) {
-    if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(`${JSON.stringify(a)} != ${JSON.stringify(b)}`);
-  },
-};
+import { assert, type Test } from "./t";
 
 type Deferred = { resolve: (s: Snapshot | null) => void; promise: Promise<Snapshot | null> };
 const deferred = (): Deferred => {
@@ -32,7 +24,7 @@ function harness() {
   return { sync, fetches, applied };
 }
 
-const tests: [string, () => Promise<void>][] = [
+export const tests: Test[] = [
   ["event during an in-flight refresh queues another refresh", async () => {
     const { sync, fetches, applied } = harness();
     sync.snapshot(snap(1), 1);
@@ -87,19 +79,3 @@ const tests: [string, () => Promise<void>][] = [
     assert.equal(fetches.length, 1);
   }],
 ];
-
-async function main() {
-  let failed = 0;
-  for (const [name, fn] of tests) {
-    try {
-      await fn();
-      console.log(`PASS  ${name}`);
-    } catch (e) {
-      failed++;
-      console.log(`FAIL  ${name}\n      ${(e as Error).message}`);
-    }
-  }
-  console.log(`${tests.length - failed}/${tests.length} passed`);
-  process.exit(failed ? 1 : 0);
-}
-void main();

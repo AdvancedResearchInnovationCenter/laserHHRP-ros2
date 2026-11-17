@@ -90,6 +90,18 @@ MUTATIONS = [
      "    return True, \"frames.bin verified\"\n    n, error = count_records(Path(raw_dir) / \"frames.bin\")\n"),
     ("Retry allowed although replay is not implemented [4.5]", "state.py",
      'if not getattr(self.detector_control, "can_replay", False):', "if False:"),
+    # Phase 4: export and the Retry flag the screens use
+    ("Retry shown whenever raw data is verified [4.5]", "state.py",
+     '"retry_available": bool(s["replay_eligible"]) and bool(getattr(self.detector_control, "can_replay",',
+     '"retry_available": bool(s["replay_eligible"]) or bool(getattr(self.detector_control, "can_replay",'),
+    ("CSV leaves out scans without features [8 history]", "export.py",
+     "        if not features:\n", "        if False:\n"),
+    ("USB export writes outside the approved mount roots [7 USB]", "export.py",
+     "if not any(path != root and root in path.parents for root in self.roots):", "if False:"),
+    ("USB export overwrites an existing file [7 USB]", "export.py",
+     "os.O_WRONLY | os.O_CREAT | os.O_EXCL", "os.O_WRONLY | os.O_CREAT | os.O_TRUNC"),
+    ("Failed USB export not audited [8 export]", "api.py",
+     "            engine.record_export(uuid, False, str(mount), e.message, rows)\n", ""),
 ]
 
 

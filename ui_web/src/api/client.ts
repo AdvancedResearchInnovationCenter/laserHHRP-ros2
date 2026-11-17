@@ -1,10 +1,10 @@
-import type { ApiError } from "./types";
+import type { ApiError, Inspection, Scan, UsbTarget } from "./types";
 
 const P = "/api/v1";
 
-export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
+export type Result<T = unknown> = { ok: true; data: T } | { ok: false; error: ApiError };
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<Result<T>> {
+async function call<T = unknown>(method: string, path: string, body?: unknown): Promise<Result<T>> {
   try {
     const r = await fetch(P + path, {
       method,
@@ -28,14 +28,21 @@ export const api = {
   logout: () => call("POST", "/operator/logout"),
   // request_id makes a double tap create one inspection
   createInspection: (mode: string, label?: string) =>
-    call("POST", "/inspections", { mode, label: label || undefined, request_id: requestId() }),
+    call<Inspection>("POST", "/inspections", { mode, label: label || undefined, request_id: requestId() }),
   endInspection: (uuid: string) => call("POST", `/inspections/${uuid}/end`),
   setExpected: (uuid: string, count: number) => call("PATCH", `/inspections/${uuid}/next-expected-count`, { count }),
-  decide: (scanId: string, decision: "accept" | "rescan") => call("POST", `/scans/${scanId}/decision`, { decision }),
+  decide: (scanId: string, decision: "accept" | "rescan") => call<Scan>("POST", `/scans/${scanId}/decision`, { decision }),
   failureAction: (scanId: string, action: "retry" | "rescan" | "keep_incomplete") =>
-    call("POST", `/scans/${scanId}/failure-action`, { action }),
-  scans: (uuid: string) => call("GET", `/inspections/${uuid}/scans`),
+    call<Scan>("POST", `/scans/${scanId}/failure-action`, { action }),
+  inspections: () => call<Inspection[]>("GET", "/inspections"),
+  scans: (uuid: string) => call<Scan[]>("GET", `/inspections/${uuid}/scans`),
+  scan: (scanId: string) => call<Scan>("GET", `/scans/${scanId}`),
   restartDetector: () => call("POST", "/detector/restart"),
+  // GET download: the browser saves the file; nothing is written on the server
+  csvUrl: (uuid: string) => `${P}/inspections/${uuid}/export.csv`,
+  usbTargets: () => call<{ targets: UsbTarget[]; roots: string[] }>("GET", "/exports/usb"),
+  exportUsb: (uuid: string, mount: string) =>
+    call<{ path: string; rows: number }>("POST", `/inspections/${uuid}/exports/usb`, { mount }),
   // mock-only developer controls (404 unless the backend runs with --mock)
   mock: {
     press: () => call("POST", "/dev/mock/press"),

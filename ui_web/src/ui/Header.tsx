@@ -1,0 +1,72 @@
+import { useState } from "react";
+import type { Screen, Snapshot } from "../api/types";
+import { MODE_LABEL, type Tone } from "../lib/format";
+import { Modal } from "./Modal";
+
+export const SCREEN_PILL: Record<Screen, { label: string; tone: Tone }> = {
+  identify: { label: "SIGN IN", tone: "neutral" },
+  setup: { label: "SETUP", tone: "neutral" },
+  ready: { label: "READY", tone: "ok" },
+  not_ready: { label: "NOT READY", tone: "bad" },
+  scanning: { label: "SCANNING", tone: "info" },
+  finishing_analysis: { label: "ANALYZING", tone: "warn" },
+  results: { label: "RESULTS", tone: "info" },
+  analysis_failed: { label: "ANALYSIS FAILED", tone: "bad" },
+};
+
+type AlertItem = { text: string; tone: "bad" | "warn" };
+
+/** Sticky backend alerts, then current warnings (time quality has its own header badge). */
+export function alertItems(snap: Snapshot): AlertItem[] {
+  return [
+    ...snap.alerts.map((a) => ({ text: a.message, tone: "bad" as const })),
+    ...snap.warnings.filter((w) => w !== "Time not verified").map((w) => ({ text: w, tone: "warn" as const })),
+  ];
+}
+
+export function Header({ snap, connected }: { snap: Snapshot; connected: boolean }) {
+  const [open, setOpen] = useState(false);
+  const items = alertItems(snap);
+  const pill = connected ? SCREEN_PILL[snap.screen] : { label: "OFFLINE", tone: "bad" as Tone };
+  return (
+    <header className="hdr">
+      <span className={`state-pill ${pill.tone}`} data-testid="state-pill">
+        {snap.screen === "scanning" && connected && <span className="rec" />}{pill.label}
+      </span>
+      {snap.inspection && (
+        <span className="hdr-insp">
+          <strong>{snap.inspection.label}</strong>
+          <span className="muted"> · {MODE_LABEL[snap.inspection.mode]}</span>
+        </span>
+      )}
+      <span className="spacer" />
+      {snap.clock_quality === "unverified" && <span className="pill warn">Time not verified</span>}
+      {snap.operator && <span className="hdr-op">{snap.operator.operator_id}</span>}
+      {items.length > 0 && (
+        <button className={`hdr-alerts ${items[0].tone}`} aria-label="Alerts and warnings" onClick={() => setOpen(true)}>
+          ⚠ {items.length}
+        </button>
+      )}
+      <span className={`conn ${connected ? "on" : "off"}`} title={connected ? "Connected" : "Disconnected"} />
+      {open && (
+        <Modal title="Alerts and warnings" onClose={() => setOpen(false)}>
+          <ul className="alert-list">
+            {items.map((i, k) => <li key={k} className={i.tone}>{i.text}</li>)}
+          </ul>
+        </Modal>
+      )}
+    </header>
+  );
+}
+
+/** The first alert as a line under the header; the header's ⚠ button lists them all. */
+export function AlertStrip({ snap }: { snap: Snapshot }) {
+  const items = alertItems(snap);
+  if (!items.length) return null;
+  return (
+    <div className={`strip ${items[0].tone}`} data-testid="alert-strip">
+      <span className="strip-text">{items[0].text}</span>
+      {items.length > 1 && <span className="strip-more">+{items.length - 1} more</span>}
+    </div>
+  );
+}

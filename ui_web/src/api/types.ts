@@ -14,7 +14,16 @@ export interface Feature {
   x_mm: number; y_mm: number; z_mm: number; diameter_mm: number | null; partial: boolean;
   quality: { coverage: number | null; scanned_share: number | null; rms_mm: number | null };
   measurement: Measurement;
+  detected_at?: string;
 }
+
+export interface RawRecording {
+  session_id: string | null; dir: string | null; state: string | null; frame_count: number | null; note: string | null;
+}
+
+export type ScanStatus =
+  | "unassigned" | "scanning" | "analyzing" | "accepted" | "accepted_with_warning" | "rescanned"
+  | "incomplete_retained" | "undecided" | "failed";
 
 export interface Scan {
   scan_id: string; scan_number: number | null; display_name: string; inspection_uuid: string | null;
@@ -22,9 +31,13 @@ export interface Scan {
   detected_target_count: number; non_target_count: number; partial_target_count: number;
   count_mismatch: boolean | null; acquisition: string; acquisition_note: string | null;
   analysis: "pending" | "complete" | "failed" | "interrupted"; analysis_error: string | null;
-  decision: string | null; status: string; unassigned_reason: string | null;
+  decision: string | null; decided_by: string | null; decided_at: string | null;
+  status: ScanStatus; unassigned_reason: string | null;
   started_at: string; ended_at: string | null; clock_quality: string; frame_count: number | null;
-  replay_eligible: boolean; features?: Feature[];
+  replay_eligible: boolean;
+  retry_available: boolean;          // verified raw data AND a replay path: only then offer Retry
+  raw: RawRecording;
+  features?: Feature[];
 }
 
 export interface Inspection {
@@ -40,7 +53,7 @@ export interface Snapshot {
   operator: { operator_id: string; started_at: string } | null;
   inspection: Inspection | null;
   ready: boolean; not_ready_reasons: string[]; warnings: string[]; alerts: Alert[];
-  hardware: { fresh: boolean; distance_mm: number; scan_state: string } | null;
+  hardware: Hardware | null;
   detector: { mode: Mode | null; alive: boolean; ready: boolean; error: string };
   source: "none" | "mock" | "ros"; clock_quality: string;
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
@@ -48,6 +61,14 @@ export interface Snapshot {
   preview_notice: string | null;
   event_seq?: number;
 }
+
+export interface Hardware {
+  fresh: boolean; scan_state: string; calibrated: boolean; laser_ok: boolean; nano_ok: boolean; encoder_ok: boolean;
+  free_mb: number | null; storage_write_failed: boolean; distance_mm: number; message: string;
+  fatal: string[]; warnings: string[];
+}
+
+export interface UsbTarget { path: string; name: string; writable: boolean; free_mb: number | null; reason: string }
 
 export interface Preview {
   number: number; inspection_uuid: string | null; mode: Mode | null; scanning: boolean;

@@ -16,9 +16,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from . import models
+from .export import ExportError, UsbExporter, inspection_csv
 from .ingress import watchdog
 from .mock_ros import SCENARIOS
 from .state import CommandError
@@ -51,9 +52,11 @@ async def _run(fn, *args, **kwargs) -> JSONResponse:
 
 
 def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = None,
-               watchdog_period_s: float = 0.5, services=()) -> FastAPI:
+               watchdog_period_s: float = 0.5, services=(), usb: UsbExporter | None = None) -> FastAPI:
     """`services`: objects with blocking start()/stop() (ROS bridge, detector supervisor), started in order
-    after the ingress is bound and stopped in reverse order at shutdown."""
+    after the ingress is bound and stopped in reverse order at shutdown. `usb`: the removable-drive
+    exporter (default: /media and /run/media)."""
+    usb = usb or UsbExporter()
     tasks: list[asyncio.Task] = []
 
     @asynccontextmanager
@@ -162,6 +165,43 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         except models.ValidationError as e:
             return _error(400, "invalid", e.message, e.field)
         return await _run(engine.failure_action, scan_id, body.get("action"))
+
+    # ---- export (plan sections 7, 8) ----
+    @app.get(P + "/inspections/{uuid}/export.csv")
+    async def export_csv(uuid: str):
+        """Download only: builds the file in memory, writes nothing on the server."""
+        try:
+            name, text = inspection_csv(engine, uuid)
+        except CommandError as e:
+            return _error(e.status, e.code, e.message)
+        return Response(text, media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.get(P + "/exports/usb")
+    async def usb_targets():
+        """Read-only list of approved mounted drives."""
+        targets = await asyncio.get_running_loop().run_in_executor(None, usb.targets)
+        return {"targets": [t.view() for t in targets], "roots": [str(r) for r in usb.roots]}
+
+    @app.post(P + "/inspections/{uuid}/exports/usb")
+    async def export_usb(uuid: str, request: Request):
+        """Explicit server-side write of the inspection CSV to a listed USB drive; audited either way."""
+        try:
+            body = await _body(request)
+            name, text = inspection_csv(engine, uuid)
+        except models.ValidationError as e:
+            return _error(400, "invalid", e.message, e.field)
+        except CommandError as e:
+            return _error(e.status, e.code, e.message)
+        rows = text.count("\r\n") - 1
+        mount = body.get("mount")
+        try:
+            path = await asyncio.get_running_loop().run_in_executor(None, usb.write, mount, name[:-4], text)
+        except ExportError as e:
+            engine.record_export(uuid, False, str(mount), e.message, rows)
+            return _error(e.status, e.code, e.message, "mount")
+        engine.record_export(uuid, True, path, None, rows)
+        return {"path": path, "rows": rows}
 
     # ---- live events ----
     @app.websocket("/ws")

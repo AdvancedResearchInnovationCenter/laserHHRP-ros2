@@ -620,3 +620,18 @@ def test_recording_of_an_unknown_stamp_is_never_attributed(tmp_path):
     h.handle(RecordingSession("OPENED", 123456, "x", str(tmp_path)))
     sid = h.press()                                    # its start stamp differs
     assert h.scan(sid)["raw"]["dir"] is None
+
+
+def test_retry_available_only_when_replay_can_run():
+    """The UI shows Retry Analysis from `retry_available`: verified raw data AND a replay path (4.5)."""
+    h = Harness()
+    h.ready_inspection()
+    sid = h.press()
+    h.release(sid)
+    h.close(sid, 10)
+    h.finalize(sid, 10, success=False, error="x")
+    assert h.scan(sid)["retry_available"] is False                 # no verified raw recording
+    h.repo.update_scan(sid, replay_eligible=1)
+    assert h.scan(sid)["retry_available"] is True                  # harness detector can replay
+    h.det.can_replay = False
+    assert h.scan(sid)["retry_available"] is False                 # verified, but no replay path

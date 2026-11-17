@@ -233,6 +233,9 @@ class Engine:
             "status": self.status_label(s), "unassigned_reason": s["unassigned_reason"],
             "started_at": s["started_at"], "ended_at": s["ended_at"], "clock_quality": s["clock_quality"],
             "frame_count": s["published_frame_count"], "replay_eligible": bool(s["replay_eligible"]),
+            # Retry Analysis is offered only when it can actually run (plan section 4.5)
+            "retry_available": bool(s["replay_eligible"]) and bool(getattr(self.detector_control, "can_replay",
+                                                                          False)),
             "raw": {"session_id": s["raw_session_id"], "dir": s["raw_dir"], "state": s["raw_state"],
                     "frame_count": s["raw_frame_count"], "note": s["raw_note"]},
         }
@@ -913,6 +916,13 @@ class Engine:
             self._emit_system()
             return self.scan_view(scan)
         return self._record_decision(scan, target, "failure_action")
+
+    def record_export(self, inspection_uuid: str, ok: bool, destination: str | None, error: str | None,
+                      rows: int) -> None:
+        """Audit a server-side USB export attempt (plan section 8), successful or not."""
+        op = self.operator
+        self._audit("export_usb" if ok else "export_usb_failed", inspection_uuid=inspection_uuid,
+                    actor=op["operator_id"] if op else None, destination=destination, error=error, rows=rows)
 
     # ------------------------------------------------------------------ history
     def inspections(self, limit: int = 50) -> list[dict]:

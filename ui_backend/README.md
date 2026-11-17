@@ -117,9 +117,21 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
 | `GET /api/v1/scans/{scan_id}` | | scan with features |
 | `POST /api/v1/scans/{scan_id}/decision` | `{decision: accept\|rescan}` | completed analyses only (including earlier undecided scans); idempotent |
 | `POST /api/v1/scans/{scan_id}/failure-action` | `{action: retry\|rescan\|keep_incomplete}` | failed/interrupted only; `retry` needs verified raw data |
+| `GET /api/v1/inspections/{uuid}/export.csv` | | CSV download, built in memory: **no server-side write** |
+| `GET /api/v1/exports/usb` | | read-only list of mounted drives below the allowed roots (`--usb-root`, default `/media`, `/run/media`), with writability and free space |
+| `POST /api/v1/inspections/{uuid}/exports/usb` | `{mount}` | writes `<label>.csv` (`-2`, `-3` ... never overwrites) to a listed drive; 403 outside the roots, 409 not mounted / read-only, 507 full; audited (`export_usb` / `export_usb_failed`) |
 | `WS /ws` | | `snapshot` first, then events |
 
 Errors: `{"error": {"code", "message", "field"}}` with 400 (invalid), 404 or 409 (wrong state).
+Scan views carry `retry_available` (verified raw data **and** a replay path): the screens offer Retry
+Analysis only when it is true.
+
+**CSV** (one inspection): one row per feature, plus one row for a scan without features, so every scan
+(including rescans and failures) appears. Columns: inspection label/UUID, mode, scan number/UUID, status,
+decision, decided by/at, operator, start/end, clock quality, expected and detected counts, mismatch,
+analysis state/error, frame count, feature id, kind, target flag, x/y/z mm, diameter, partial, coverage,
+scanned share, fit RMS, measurement name/status/value. `measurement_status` is `not_measured` and the value is
+empty in v0.1; there is no pass/fail column. Free-text cells that start with `= + - @` get a leading `'`.
 **No endpoint starts or stops the physical scan.** `/api/v1/dev/mock/*` (press, release, scenario,
 fault, hardware, layout) exist **only with `--mock`**.
 
@@ -148,5 +160,4 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
 
 ## Not yet
 
-Replay of a verified raw recording for Retry Analysis; CSV/USB export and the designed screens (Phase 4);
-Pi/apt validation and the operator launch (Phase 5). Everything is verified on an x86 laptop (Humble) only.
+Replay of a verified raw recording for Retry Analysis; Pi/apt validation and the operator launch (Phase 5). Everything is verified on an x86 laptop (Humble) only.

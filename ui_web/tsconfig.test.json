@@ -9,5 +9,5 @@
     "types": [],
     "lib": ["ES2020", "DOM"]
   },
-  "include": ["tests", "src/state/snapshotSync.ts", "src/api/types.ts"]
+  "include": ["tests"]
 }

@@ -3,7 +3,7 @@
 For whoever continues this work (developer or coding agent). Read with [plan.md](plan.md), the execution
 contract. This file says **where things stand, how to run and verify them, and what is left**.
 
-State as of 2026-11-17, branch `ui` @ `140ca9a` (pushed, clean). `dev` and `main` were never touched.
+State as of 2026-11-17, branch `ui`, after the Phase 4 commit (see `git log`). `dev` and `main` were never touched.
 
 ---
 
@@ -16,16 +16,18 @@ State as of 2026-11-17, branch `ui` @ `140ca9a` (pushed, clean). `dev` and `main
 | External code review of `3d7f52e` (5 findings) | All fixed with regression tests | `e6a2c81` | VERIFY_PHASE1.md, last section |
 | 2 Live ROS bridge, one-detector supervisor | Done (its preview mode was superseded by Phase 3) | `018bb06` | [VERIFY_PHASE2.md](docs/operator_ui/VERIFY_PHASE2.md) |
 | 3 Scan identity, finalization, raw recording link | Done | `140ca9a` | [VERIFY_PHASE3.md](docs/operator_ui/VERIFY_PHASE3.md) |
-| 4 Operator screens (800 × 480) | **Not started**: the frontend is a plain scaffold | | |
+| 4 Operator screens (800 × 480), CSV / USB export | Done on the laptop (mock and live ROS); kiosk on the Pi still open | Phase 4 commit | [VERIFY_PHASE4.md](docs/operator_ui/VERIFY_PHASE4.md) |
 | 5 Pi 5 deployment and verification | **Not started** | | |
 
 Everything was built and verified on an **x86 laptop, Ubuntu 22.04, ROS 2 Humble**. The target is the
 **Raspberry Pi 5, Ubuntu 24.04, ROS 2 Jazzy**. Nothing has run on the Pi, on real hardware, or on real bags yet.
 
-What works today, end to end in simulation: identify operator → create a CSK or Rivet inspection (the backend
-starts exactly one detector) → Ready → physical scan (switch) → every scan recorded under the controller's UUID
-→ the detector's final pass and terminal acknowledgement → Results (count, mismatch warning, *Not measured*) →
-Accept / Rescan → history; failures, restarts, crashes and rapid presses handled explicitly.
+What works today, end to end in simulation and on the designed 800 × 480 screens: identify the operator (on-screen
+keyboard) → create a CSK or Rivet inspection (the backend starts exactly one detector) → Ready (expected count on
+a keypad) → physical scan (switch) → count circles filling, also after release → every scan recorded under the
+controller's UUID → the detector's final pass and terminal acknowledgement → Results (SVG map, count, mismatch
+warning, *Not measured*) → Accept / Rescan → History (undecided scans decided later, CSV download, USB export).
+Failures, restarts, crashes, rapid presses and a lost backend connection are handled explicitly.
 
 ---
 
@@ -34,7 +36,7 @@ Accept / Rescan → history; failures, restarts, crashes and rapid presses handl
 ```
 plan.md                         execution contract (author force-pushed it twice early on; now normal pushes)
 handover.md                     this file
-docs/operator_ui/               BASELINE.md, VERIFY_PHASE1/2/3.md: evidence and how to re-check
+docs/operator_ui/               BASELINE.md, VERIFY_PHASE1..4.md: evidence and how to re-check; screens/ = 800x480 screenshots
 laserHHRP/msg/                  6 NEW messages (additive; originals unchanged)
 laserHHRP/src/                  scan_controller_node, synchronizer_node, recorder_node: identity additions (Phase 3)
 hole_detector/, rivet_detector/ node.py + results.py: opt-in tagged mode (Phase 3)
@@ -47,13 +49,17 @@ ui_backend/                     ROS 2 ament_python package laser_hhrp_ui (the ba
     ros_bridge.py               read-only rclpy bridge (tagged topics) -> events
     detector_supervisor.py      one allowlisted detector process, readiness from the ROS graph
     raw_recording.py            frames.bin verification
+    export.py                   inspection CSV (in memory) and USB writer (allowlisted mounts, never overwrites)
     ingress.py, hub.py, api.py  thread hand-off, WebSocket fan-out, FastAPI HTTP/WS
     mock_ros.py                 mock source (no ROS): late detections, faults, scenarios
     server.py                   entry point (`ros2 run laser_hhrp_ui server`)
-  test/                         103 tests
-ui_web/                         Vite + React + TS scaffold (Phase 4 replaces the screens); npm test (5)
+  test/                         113 tests
+ui_web/                         Vite + React + TS operator screens (800 x 480); npm test (35)
+  src/screens/                  Identify, Setup, Ready, Scanning, Results, History
+  src/ui/                       keyboard/keypad, count circles, SVG map, feature detail, header, modal
+  src/lib/                      map geometry (the map contract), circle layout, wording: pure, unit-tested
 tools/ui_baseline/              Phase 0 runner and probes
-tools/ui_verify/                mutation check, Phase 3 live checks, legacy bag adapter
+tools/ui_verify/                mutation checks (backend, web), Phase 3 live checks, Phase 4 browser checks, legacy bag adapter
 ```
 
 ---
@@ -113,9 +119,11 @@ Every live script uses its own ROS domain, a loopback-only CycloneDDS config
 
 | What | Command | Last result (laptop) |
 | --- | --- | --- |
-| Backend unit tests | `cd ui_backend && python3 -m pytest -q test/` | 103 passed, ~15 s |
-| Frontend tests | `cd ui_web && npm test` | 5/5 |
-| Do the tests catch real bugs? | `python3 tools/ui_verify/mutation_check.py` | 24/24 planted bugs caught, ~5 min |
+| Backend unit tests | `cd ui_backend && python3 -m pytest -q test/` | 113 passed, ~15 s |
+| Frontend tests | `cd ui_web && npm test` | 35/35 |
+| Do the tests catch real bugs? | `python3 tools/ui_verify/mutation_check.py`; `web_mutation_check.py` | 29/29 backend, 15/15 UI planted bugs caught |
+| Screens in a real browser, mock | `tools/ui_verify/phase4_screens.sh` | 118/118, ~1.5 min; screenshots in its output folder |
+| Screens in a real browser, live ROS | `HHRP_WS=… tools/ui_verify/phase4_live.sh` | 40/40 |
 | Phase 0 baseline / legacy regression | `tools/ui_baseline/run_baseline.sh` | INCOMPLETE (bags missing), 0 failures. Exit 0 pass / 1 fail / 3 not all ran |
 | Identity layer (controller, synchronizer, recorder) | `HHRP_WS=… tools/ui_verify/phase3_identity_check.sh` | 19/19 |
 | Tagged detector = legacy output | `HHRP_WS=… [CHECK_DETECTOR=rivet_detector] tools/ui_verify/phase3_detector_check.sh` | 16/16 each |
@@ -167,8 +175,15 @@ backend: ROS thread -> bounded ingress queue -> Engine (single thread, asyncio) 
 
 Documented in [ui_backend/README.md](ui_backend/README.md): `/api/v1/state`, `/health`, operator,
 inspections (create, end, next-expected-count), scans (detail, decision, failure-action),
-`/detector/restart`, `WS /ws` (snapshot, then versioned envelopes with `event_seq`). Errors:
-`{"error": {code, message, field}}`, 400 / 404 / 409.
+`/detector/restart`, export (`GET …/export.csv` download only; `GET /exports/usb` drives; `POST
+…/exports/usb` write, audited), `WS /ws` (snapshot, then versioned envelopes with `event_seq`). Errors:
+`{"error": {code, message, field}}`, 400 / 403 / 404 / 409 / 507. Scans carry `retry_available`.
+
+### Frontend
+
+A view of the backend snapshot: `snapshot.screen` picks the screen; History is the only local navigation (a
+physical scan start closes it). It never derives lifecycle, counts or target filtering. Map contract and
+layout rules: [ui_web/README.md](ui_web/README.md).
 
 ### Database
 
@@ -214,11 +229,12 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
 - **Retry replay** not implemented (see §6.7).
 - A tracker reset inside one scan (scan direction turning back) restarts hole ids; in tagged mode that makes the
   scan fail as a conflict (honest, but possible on odd scans).
-- `ui_web/src/api/types.ts` does not model the new `raw` scan fields yet (Phase 4).
 - The Phase 2 preview mode still exists as source `ros-preview` in the engine (tests use it), but no CLI flag
   selects it.
-- Not implemented from the plan: Developer Mode / PIN, CSV and USB export, manual clock verification
-  procedure, operator launch file, kiosk.
+- Not implemented from the plan: Developer Mode / PIN, manual clock verification procedure, operator
+  launch file, kiosk.
+- USB export is tested against temporary directories standing in for mounts, never a real stick.
+- The screens were checked in headless Brave on the laptop, not on the Pi's Chromium and 5-inch touchscreen.
 
 **Environment traps (cost real time)**
 - The dev laptop's `CYCLONEDDS_URI` binds the scanner-network interface; with that link down every node fails
@@ -239,7 +255,7 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
 **Process notes**
 - Commits went straight to `ui` with normal pushes, one per phase (+ the review fix). Plan §12: never
   force-push, never touch `dev` / `main`.
-- External review covered Phase 1 (`3d7f52e`); Phases 2 and 3 have not been reviewed by anyone else.
+- External review covered Phase 1 (`3d7f52e`); Phases 2, 3 and 4 have not been reviewed by anyone else.
 
 ---
 
@@ -248,16 +264,6 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
 ### Finish Phase 0 (small)
 On a machine with the detector bags (ROS container or Pi): `tools/ui_baseline/run_baseline.sh`; record the bag
 results in BASELINE.md. Then `tools/ui_verify/legacy_bag_adapter.py <bag>` with a tagged detector running.
-
-### Phase 4: operator screens (plan §9, §10)
-Replace `ui_web/src/App.tsx` (scaffold) with the five designed screens at **800 × 480**:
-Identification (on-screen keyboard), Setup, Ready/Scanning/Finishing (count circles, >40 → 40 + remainder),
-Results (SVG map of local XY: x = position_m[0]·1000 rightward, y = position_m[1]·1000 downward, uniform scale,
-+Y indicator, tap targets larger than the circles; selected feature details; Accept / Rescan), History
-(statuses incl. UNDECIDED and Failed/Incomplete, later decisions). Plus: GET CSV download and POST USB export
-(plan §7, §8), `types.ts` for `raw`, UI unit/component tests, and screenshot QA at 800 × 480 (a browser driver
-such as Playwright: Firefox's headless screenshot captures before the WebSocket delivers state). Keep the
-frontend a view: never derive lifecycle, counts or target filtering; keep `SnapshotSync`.
 
 ### Phase 5: Pi deployment (plan §10)
 - Operator launch (additive; do not change the meaning of `hhrp.launch.py ui`): core with `holes:=false
@@ -270,6 +276,8 @@ frontend a view: never derive lifecycle, counts or target filtering; keep `Snaps
 - Run every check in §4 on the Pi; record results in a VERIFY_PHASE5.md.
 - Hardware: GPIO press/release, rapid presses, calibration, ERROR stops (laser unplugged), disk full, backend
   and detector crashes, browser reload, clock unverified (no RTC).
+- Screens on the real display: run `BROWSER=chromium tools/ui_verify/phase4_screens.sh` on the Pi, then check
+  touch, fonts and readability by hand; export to a real USB stick (udisks mount under `/media/<user>/`).
 
 ### Optional
 - Retry Analysis by replaying a verified `frames.bin` as tagged frames into the detector (the bag adapter shows
