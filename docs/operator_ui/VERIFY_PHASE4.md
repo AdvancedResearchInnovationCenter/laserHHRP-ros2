@@ -24,8 +24,8 @@ No ROS node, message or detector changed in Phase 4.
 | Screens in a real browser on **live ROS** (simulated core, real backend, supervised detector) | `HHRP_WS=… tools/ui_verify/phase4_live.sh` | **40/40** (+ SIGTERM leaves no detector) |
 | Frontend tests | `cd ui_web && npm test` | **35/35** |
 | Planted UI bugs | `python3 tools/ui_verify/web_mutation_check.py` | **15/15** caught, each by a behaviour test |
-| Backend tests | `cd ui_backend && python3 -m pytest -q test/` | **113** passed (10 new: export, retry flag) |
-| Planted backend bugs | `python3 tools/ui_verify/mutation_check.py` | **29/29** caught (5 new: CSV completeness, USB allowlist / overwrite / audit, retry flag) |
+| Backend tests | `cd ui_backend && python3 -m pytest -q test/` | **118** passed (10 for Phase 4, 5 more after the review below) |
+| Planted backend bugs | `python3 tools/ui_verify/mutation_check.py` | **32/32** caught (Phase 4: CSV completeness, USB allowlist / overwrite / audit, retry flag; review: 3 more) |
 
 The browser checks drive headless Chromium-family browsers over the DevTools protocol (Brave on this laptop;
 `BROWSER=chromium` on the Pi), with a throwaway profile, at exactly 800 × 480. They tap buttons the way a finger
@@ -99,6 +99,36 @@ All at 800 × 480 from the runs above: [screens/](screens/). Mock: `01`–`23`. 
 - **The detector mode cannot be changed** from Ready, by design: End inspection, then start a new one.
 - Times are shown in the browser's local time and marked `?` when the clock was not verified when they were
   recorded.
+
+## Code review of 78004e1 (2026-11-18)
+
+External review of Phases 3 and 4. Each finding was checked against the code first; all were real.
+
+| Finding | Fix | Regression test (fails on the old code) |
+| --- | --- | --- |
+| P2 conflicting terminal messages ignored or only audited | identical redelivery ignored; a different second `ScanStreamClosed` / `DetectionFinalized` fails a pending analysis; after the analysis is closed the scan is not rewritten, an alert is raised | `test_conflicting_terminal_message_fails_identical_is_ignored`, `test_conflicting_terminal_message_after_completion_alerts` |
+| P2 a delayed controller stop arrived too late | an `UNCONFIRMED` stop keeps the analysis pending until the controller's stop or the 120 s watchdog ("stop not confirmed") | `test_controller_stop_arriving_after_close_and_finalization`, `test_inferred_stop_never_completes` |
+| P2 detector file-write errors hidden | write failures are recorded per scan folder; `DetectionFinalized` then reports failure with the reason; an uncreatable scan folder too (it used to raise inside a ROS callback). Both detectors | `test_write_failure_fails_the_scan` in each detector's test script (also in `run_baseline.sh`) |
+| Minor: a skip taking over 0.5 s counted as PASS | any `skip` line means SKIP, whatever the duration | laptop baseline: still INCOMPLETE, 0 failures |
+
+After the fixes: backend 118, frontend 35, planted backend bugs 32/32, identity 19/19, end to end all passed,
+screens 118/118 (mock) and 40/40 (live ROS), baseline INCOMPLETE with 0 failures (bags missing), detector check 16/16
+in 6 of 6 hole runs and on the rivet detector.
+
+### Found while re-running: the 3 mm hole is marginal
+
+The Phase 3 detector check turned out to be flaky. **It is not caused by tagging or by these fixes**, and
+`detector.py` has not changed since before the UI work.
+
+- The synthetic plate's y = 15 mm hole is 3 mm across and sits at the `max_roundness` limit (0.08). The legacy
+  and the tagged node each sometimes rejected it as "not round".
+- It reproduces without ROS: the same plate through `Tracker` with 10 sets of cycle boundaries found it in 4 of 10.
+  With `max_roundness` 0.10 it was found in 10 of 10.
+- A feature's reported position also moves by about 0.1 mm with the cycle boundaries.
+
+The check now runs `hole_detector` at 0.10 in both modes and compares feature type exactly and position within
+0.5 mm. **The detector's default is unchanged**: detector accuracy is out of scope for v0.1 (plan section 1). On
+real parts, small holes near the limit could be missed depending on timing, so this should be checked with the bags.
 
 ## Not covered yet
 

@@ -90,9 +90,12 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
   Otherwise the scan is pending (watchdog: warning at 10 s, failure at 120 s) or failed with a reason.
   Reaching the expected count never completes or stops anything.
 - **Stop evidence:** a scan completes only on the controller's confirmed stop. A stop inferred from the next
-  scan's start is `UNCONFIRMED` and fails ("stop not confirmed") unless the controller's own stop for it
-  arrives late; a frame-stream close with an error, or whose stop state differs from the controller's,
-  fails the analysis. A redelivered result counts as a duplicate only if it is identical (sequence, feature
+  scan's start is `UNCONFIRMED`: the analysis stays pending until the controller's own stop arrives (in any
+  order relative to the stream close and finalization) or the watchdog fails it ("stop not confirmed"). A
+  frame-stream close with an error, or whose stop state differs from the controller's, fails the analysis.
+- **Terminal messages:** an identical redelivery of `ScanStreamClosed` or `DetectionFinalized` is ignored; a
+  different second one fails a pending analysis as a conflict. After the analysis is closed the scan is not
+  rewritten, but a conflicting message raises an alert. A redelivered result counts as a duplicate only if it is identical (sequence, feature
   id, kind, position and detector detail); otherwise the scan fails as a conflict.
 - **Never invented:** measurements are always `not_measured` (both detectors send -1), `passed` is
   ignored, `partial` comes only from the detector's `detail.partial`, and a hardware `ERROR` stop fails

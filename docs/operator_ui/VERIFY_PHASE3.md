@@ -45,6 +45,11 @@ What the checks cover:
   verified raw folders, the earlier one UNDECIDED; crash → NOT READY, explicit restart; scan without inspection
   → UNASSIGNED; mode switch → exactly one rivet_detector; SIGTERM leaves no detector.
 
+> **Correction (2026-11-18).** The detector check above first compared tagged and legacy results *exactly*. Repeated
+> runs showed that comparison was flaky, for a reason unrelated to tagging; see "Code review of 78004e1" in
+> [VERIFY_PHASE4.md](VERIFY_PHASE4.md). It now runs `hole_detector` at `max_roundness` 0.10 in both modes and
+> compares feature type exactly and position within 0.5 mm.
+
 ## Findings worth knowing
 
 - **Frames are lost if a detector falls behind.** Fed at 400 frames/s (3× the laser's real rate) the rivet

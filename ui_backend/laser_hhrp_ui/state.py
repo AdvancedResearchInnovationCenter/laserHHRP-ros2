@@ -439,8 +439,29 @@ class Engine:
         if scan["analysis"] != Analysis.PENDING.value:
             self._audit("event_after_analysis_closed", scan_id=scan_id, event=type(e).__name__,
                         analysis=scan["analysis"])
+            self._check_late_terminal(scan, e)
             return None
         return scan
+
+    def _check_late_terminal(self, scan: dict, e) -> None:
+        """A terminal message after the analysis was closed: a redelivery must match what was recorded.
+        A conflicting one cannot change a closed (possibly decided) scan, but must not pass silently."""
+        if isinstance(e, StreamClosed):
+            same = scan["published_frame_count"] in (None, e.frame_count) and not e.error
+        elif isinstance(e, DetectionFinalized):
+            same = (scan["emitted_result_count"] in (None, e.emitted_result_count)
+                    and (e.success or scan["analysis"] != Analysis.COMPLETE.value))
+        else:
+            return
+        if not same:
+            self._alert("conflicting_terminal", f"{type(e).__name__} for an already closed scan conflicts with its "
+                        f"record ({scan['analysis']}): check this scan's data", scan["scan_id"])
+
+    def _conflict(self, scan_id: str, kind: str, first, second) -> None:
+        """A second, different terminal message for the same scan: the evidence disagrees, so the analysis
+        cannot be trusted (identical redeliveries are ignored before this)."""
+        self._audit("conflicting_" + kind, scan_id=scan_id, first=repr(first), second=repr(second))
+        self._fail(scan_id, f"conflicting {kind.replace('_', ' ')} messages for this scan")
 
     def _on_result(self, e: TaggedResult) -> None:
         scan = self._assigned_pending(e.scan_id, e)
@@ -479,7 +500,9 @@ class Engine:
             return
         rt = self.runtime.setdefault(e.scan_id, ScanRuntime())
         if rt.closed is not None:
-            return
+            if rt.closed != e:
+                self._conflict(e.scan_id, "stream_close", rt.closed, e)
+            return                                            # identical redelivery: ignored
         rt.closed = e
         self.repo.update_scan(e.scan_id, published_frame_count=e.frame_count)
         self._verify_raw(e.scan_id)
@@ -496,8 +519,8 @@ class Engine:
         rt = self.runtime.setdefault(e.scan_id, ScanRuntime())
         if rt.finalized is not None:
             if rt.finalized != e:
-                self._audit("conflicting_finalization", scan_id=e.scan_id)
-            return
+                self._conflict(e.scan_id, "detector_finalization", rt.finalized, e)
+            return                                            # identical redelivery: ignored
         rt.finalized = e
         self.repo.update_scan(e.scan_id, emitted_result_count=e.emitted_result_count)
         self._audit("detection_finalized", scan_id=e.scan_id, success=e.success, error=e.error,
@@ -532,8 +555,7 @@ class Engine:
         if scan["acquisition"] == Acquisition.ERROR.value:
             return self._fail(scan_id, f"acquisition stopped by error{': ' + scan['acquisition_note'] if scan['acquisition_note'] else ''}")
         if scan["stop_state"] == UNCONFIRMED:
-            return self._fail(scan_id, "acquisition stop not confirmed: the controller's stop transition is "
-                                       "missing (the stop was inferred from the next scan's start)")
+            return    # everything else is in: wait for the controller's own stop (late) or the watchdog
         if c.stop_state != scan["stop_state"]:
             return self._fail(scan_id, f"stop state mismatch: controller {scan['stop_state']}, "
                                        f"frame stream {c.stop_state}")
@@ -727,8 +749,13 @@ class Engine:
             waited = now - rt.released_mono
             if waited >= self.fail_after_s:
                 missing = [n for n, ok in (("stream close", rt.closed), ("detector finalization", rt.finalized))
-                           if ok is None] or ["detector results"]
-                self._fail(scan_id, f"analysis timeout after {waited:.0f} s (missing {', '.join(missing)})")
+                           if ok is None]
+                scan = self.repo.scan(scan_id)
+                if scan is not None and scan["stop_state"] == UNCONFIRMED:
+                    missing.append("the controller's stop transition: acquisition stop not confirmed (the stop "
+                                   "was inferred from the next scan's start)")
+                self._fail(scan_id, f"analysis timeout after {waited:.0f} s "
+                                    f"(missing {', '.join(missing or ['detector results'])})")
             elif waited >= self.warn_after_s and not rt.warned:
                 rt.warned = True
                 self._emit_system()

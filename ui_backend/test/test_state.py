@@ -4,6 +4,8 @@ import uuid
 
 import pytest
 
+from laser_hhrp_ui.events import DetectionFinalized
+
 from harness import Harness
 from laser_hhrp_ui.models import ValidationError
 from laser_hhrp_ui.repository import Repository
@@ -502,6 +504,8 @@ def test_stream_stop_state_must_match_the_controller():
 
 
 def test_inferred_stop_never_completes():
+    """Review 2026-11-18 #2: an inferred stop waits (it does not fail at once); without the controller's
+    confirmation the watchdog fails it, never success."""
     h = Harness()
     h.ready_inspection(count=2)
     a = h.press()
@@ -510,11 +514,36 @@ def test_inferred_stop_never_completes():
     assert h.scan(a)["acquisition"] == "ended" and h.repo.scan(a)["stop_state"] == "UNCONFIRMED"
     h.close(a)
     h.finalize(a)                                      # everything else matches
-    v = h.scan(a)
-    assert v["analysis"] == "failed" and "stop not confirmed" in v["analysis_error"]
+    assert h.scan(a)["analysis"] == "pending"          # waiting for the controller's stop
     with pytest.raises(CommandError):
         h.engine.decide(a, "accept")
-    assert h.scan(b)["analysis"] == "pending"
+    h.clock.advance(h.engine.fail_after_s + 1)
+    h.engine.tick()
+    v = h.scan(a)
+    assert v["analysis"] == "failed" and "stop not confirmed" in v["analysis_error"]
+    assert "timeout" in v["analysis_error"]
+    with pytest.raises(CommandError):
+        h.engine.decide(a, "accept")
+
+
+@pytest.mark.parametrize("late_state, outcome", [("IDLE", "complete"), ("ERROR", "failed")])
+def test_controller_stop_arriving_after_close_and_finalization(late_state, outcome):
+    """Review 2026-11-18 #2: stream close and finalization first, the controller's real stop last."""
+    h = Harness()
+    h.ready_inspection(count=2)
+    a = h.press()                                      # transition 1
+    h.results(a, 2)
+    b = str(uuid.uuid4())
+    h.transition(b, "SCANNING", seq=3)                 # A's stop (seq 2) is late
+    h.close(a, stop_state=late_state)
+    h.finalize(a)
+    assert h.scan(a)["analysis"] == "pending" and h.repo.scan(a)["stop_state"] == "UNCONFIRMED"
+    h.clock.advance(h.engine.fail_after_s / 2)
+    h.engine.tick()
+    assert h.scan(a)["analysis"] == "pending"
+    h.transition(a, late_state, seq=2)                 # the controller's stop, last of all
+    assert h.scan(a)["analysis"] == outcome
+    assert h.repo.audit_events("stop_confirmed_late")
 
 
 @pytest.mark.parametrize("late_state, outcome", [("IDLE", "complete"), ("ERROR", "failed")])
@@ -635,3 +664,40 @@ def test_retry_available_only_when_replay_can_run():
     assert h.scan(sid)["retry_available"] is True                  # harness detector can replay
     h.det.can_replay = False
     assert h.scan(sid)["retry_available"] is False                 # verified, but no replay path
+
+
+@pytest.mark.parametrize("kind", ["close", "finalize"])
+def test_conflicting_terminal_message_fails_identical_is_ignored(kind):
+    """Review 2026-11-18 #1: identical terminal redeliveries are harmless; a different second one fails."""
+    h = Harness()
+    h.ready_inspection(count=2)
+    sid = h.press()
+    h.results(sid, 2)
+    h.release(sid)
+    if kind == "close":
+        h.close(sid, 500)
+        h.close(sid, 500)                              # identical: ignored
+        assert h.scan(sid)["analysis"] == "pending"
+        h.close(sid, 499)                              # different frame count
+    else:
+        h.close(sid, 500)
+        h.handle(DetectionFinalized(sid, "csk_depth", 500, 3, 3, True, ""))   # declares a result not yet in
+        h.handle(DetectionFinalized(sid, "csk_depth", 500, 3, 3, True, ""))   # identical: ignored
+        assert h.scan(sid)["analysis"] == "pending"
+        h.handle(DetectionFinalized(sid, "csk_depth", 500, 2, 2, True, ""))   # different
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and "conflicting" in v["analysis_error"], v["analysis_error"]
+    assert h.repo.audit_events("conflicting_stream_close" if kind == "close" else "conflicting_detector_finalization")
+
+
+def test_conflicting_terminal_message_after_completion_alerts():
+    h = Harness()
+    h.ready_inspection(count=2)
+    sid = h.complete_scan(2, frames=500)
+    assert h.scan(sid)["analysis"] == "complete"
+    h.close(sid, 500)                                  # redelivery after completion: nothing to report
+    h.finalize(sid, 500)
+    assert not any(a["code"] == "conflicting_terminal" for a in h.engine.alerts)
+    h.handle(DetectionFinalized(sid, "csk_depth", 500, 2, 2, False, "late failure"))
+    assert any(a["code"] == "conflicting_terminal" for a in h.engine.alerts)
+    assert h.scan(sid)["analysis"] == "complete"       # a closed scan is not rewritten

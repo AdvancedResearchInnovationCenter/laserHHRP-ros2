@@ -3,7 +3,7 @@
 For whoever continues this work (developer or coding agent). Read with [plan.md](plan.md), the execution
 contract. This file says **where things stand, how to run and verify them, and what is left**.
 
-State as of 2026-11-17, branch `ui` @ `5e6419c` (Phase 4, pushed; this handover update follows it). `dev` and
+State as of 2026-11-18, branch `ui`, after the fixes for the review of `78004e1` (see `git log`). `dev` and
 `main` were never touched.
 
 ---
@@ -18,6 +18,7 @@ State as of 2026-11-17, branch `ui` @ `5e6419c` (Phase 4, pushed; this handover 
 | 2 Live ROS bridge, one-detector supervisor | Done (its preview mode was superseded by Phase 3) | `018bb06` | [VERIFY_PHASE2.md](docs/operator_ui/VERIFY_PHASE2.md) |
 | 3 Scan identity, finalization, raw recording link | Done | `140ca9a` | [VERIFY_PHASE3.md](docs/operator_ui/VERIFY_PHASE3.md) |
 | 4 Operator screens (800 × 480), CSV / USB export | Done on the laptop (mock and live ROS); kiosk on the Pi still open | `5e6419c` | [VERIFY_PHASE4.md](docs/operator_ui/VERIFY_PHASE4.md) |
+| External code review of `78004e1` (3 findings + 1 minor) | All fixed with regression tests | see `git log` | VERIFY_PHASE4.md, "Code review of 78004e1" |
 | 5 Pi 5 deployment and verification | **Not started** | | |
 
 Everything was built and verified on an **x86 laptop, Ubuntu 22.04, ROS 2 Humble**. The target is the
@@ -54,7 +55,7 @@ ui_backend/                     ROS 2 ament_python package laser_hhrp_ui (the ba
     ingress.py, hub.py, api.py  thread hand-off, WebSocket fan-out, FastAPI HTTP/WS
     mock_ros.py                 mock source (no ROS): late detections, faults, scenarios
     server.py                   entry point (`ros2 run laser_hhrp_ui server`)
-  test/                         113 tests
+  test/                         118 tests
 ui_web/                         Vite + React + TS operator screens (800 x 480); npm test (35)
   src/screens/                  Identify, Setup, Ready, Scanning, Results, History
   src/ui/                       keyboard/keypad, count circles, SVG map, feature detail, header, modal
@@ -120,14 +121,14 @@ Every live script uses its own ROS domain, a loopback-only CycloneDDS config
 
 | What | Command | Last result (laptop) |
 | --- | --- | --- |
-| Backend unit tests | `cd ui_backend && python3 -m pytest -q test/` | 113 passed, ~15 s |
+| Backend unit tests | `cd ui_backend && python3 -m pytest -q test/` | 118 passed, ~15 s |
 | Frontend tests | `cd ui_web && npm test` | 35/35 |
-| Do the tests catch real bugs? | `python3 tools/ui_verify/mutation_check.py`; `web_mutation_check.py` | 29/29 backend, 15/15 UI planted bugs caught |
+| Do the tests catch real bugs? | `python3 tools/ui_verify/mutation_check.py`; `web_mutation_check.py` | 32/32 backend, 15/15 UI planted bugs caught |
 | Screens in a real browser, mock | `tools/ui_verify/phase4_screens.sh` | 118/118, ~1.5 min; screenshots in its output folder |
 | Screens in a real browser, live ROS | `HHRP_WS=… tools/ui_verify/phase4_live.sh` | 40/40 |
 | Phase 0 baseline / legacy regression | `tools/ui_baseline/run_baseline.sh` | INCOMPLETE (bags missing), 0 failures. Exit 0 pass / 1 fail / 3 not all ran |
 | Identity layer (controller, synchronizer, recorder) | `HHRP_WS=… tools/ui_verify/phase3_identity_check.sh` | 19/19 |
-| Tagged detector = legacy output | `HHRP_WS=… [CHECK_DETECTOR=rivet_detector] tools/ui_verify/phase3_detector_check.sh` | 16/16 each |
+| Tagged detector = legacy output (same types, positions within 0.5 mm) | `HHRP_WS=… [CHECK_DETECTOR=rivet_detector] tools/ui_verify/phase3_detector_check.sh` | 16/16 each; hole check 6 of 6 runs |
 | End to end (core + backend + detector) | `HHRP_WS=… tools/ui_verify/phase3_ros_check.sh` | 28/28, ~45 s |
 | Old bags through the tagged path | `tools/ui_verify/legacy_bag_adapter.py <bag>`; self-test `phase3_bag_adapter_check.sh` | PASS |
 
@@ -202,7 +203,7 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
    stop is a detectable gap.
 2. The first inspection has **no** expected count until the operator enters one (no invented default); later
    ones prefill the last value.
-3. A stop inferred from the next scan's start is `UNCONFIRMED` and fails ("stop not confirmed") unless the
+3. A stop inferred from the next scan's start is `UNCONFIRMED`: analysis stays pending, and fails on the watchdog ("stop not confirmed"), unless the
    controller's own stop arrives late (accepted even out of transition order). From the external review.
 4. A hardware ERROR stop fails the analysis but keeps the features (Rescan / Keep Incomplete).
 5. Scans started without operator, open inspection or ready detector are stored `unassigned` with the reason.
@@ -220,6 +221,10 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
 ## 7. Known issues, risks and traps
 
 **Open technical items**
+- **Marginal small holes.** A 3 mm hole on the synthetic plate sits at `max_roundness` 0.08, so it is accepted or
+  rejected depending on where the 0.2 s cycles cut the scan (found in 4 of 10 offline runs; 10 of 10 at 0.10), in
+  legacy and tagged mode alike. `detector.py` predates the UI work and its default is unchanged (accuracy is out of
+  scope). Check with the bags whether real small holes are affected. Details: VERIFY_PHASE4.md.
 - **Frame loss under load.** A detector that falls behind loses frames (reliable but bounded queues). At 3× the
   laser rate the rivet detector lost 211 of 1769 frames: legacy mode then reported different rivets silently;
   tagged mode fails the scan "missing frames". Nothing was lost at 120 frames/s on the laptop. **Measure on
@@ -256,7 +261,7 @@ Documented in `ui_backend/README.md` (Deviations) and the VERIFY files; the impo
 **Process notes**
 - Commits went straight to `ui` with normal pushes, one per phase (+ the review fix). Plan §12: never
   force-push, never touch `dev` / `main`.
-- External review covered Phase 1 (`3d7f52e`); Phases 2, 3 and 4 have not been reviewed by anyone else.
+- External reviews covered Phase 1 (`3d7f52e`) and the state at `78004e1` (Phases 3 and 4); Phase 2 had no separate review.
 
 ---
 
@@ -287,7 +292,6 @@ results in BASELINE.md. Then `tools/ui_verify/legacy_bag_adapter.py <bag>` with 
   (`retry_available`).
 - **Manual clock verification** procedure (plan §8) for a Pi without RTC: today the UI only shows *Time not
   verified*.
-- An **independent review** of Phases 2, 3 and 4.
 
 ### Things to decide with the user
 - Accept on a count mismatch has no extra confirmation (plan: warns, does not block). Keep or add one?

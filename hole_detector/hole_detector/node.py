@@ -171,7 +171,12 @@ class HoleDetector(Node):
         """The scan's job, made on first sight (caller holds the lock)."""
         job = self.jobs.get(scan_id)
         if job is None:
-            path = self.folder.make_fixed(self.folder.root / scan_id)
+            path = self.folder.root / scan_id
+            try:
+                self.folder.make_fixed(path)
+            except OSError as error:               # the scan cannot be saved: its finalization says so
+                self.get_logger().error("scan %s: cannot create %s: %s" % (scan_id, path, error))
+                self.folder.note_error(path, "scan folder: %s" % (error.strerror or error))
             job = self.jobs[scan_id] = ScanJob(scan_id, Tracker(self.params, log=self.get_logger().info), path)
             self.get_logger().info("scan %s: results in %s" % (scan_id, path))
         return job
@@ -232,6 +237,10 @@ class HoleDetector(Node):
 
     def finalize_job(self, job, success, error):
         self.folder.close()                        # every queued CSV row and PCD is on disk first
+        lost = self.folder.take_errors(job.path)   # ... or reported: a scan with missing files is not a success
+        if lost:
+            note = "could not save %d result file(s): %s" % (len(lost), "; ".join(lost[:3]))
+            success, error = False, (error + "; " + note) if error else note
         msg = DetectionFinalized(scan_id=job.scan_id, detector_mode=MODE, frame_count=len(job.indices),
                                  emitted_result_count=job.result_seq, detected_target_count=job.targets,
                                  success=success, error=error)

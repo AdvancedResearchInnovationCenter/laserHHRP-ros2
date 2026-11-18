@@ -10,6 +10,12 @@ Checks: tagged mode reports exactly what the legacy (untagged) node reports for 
 Frames are fed at the laser's real profile rate (CHECK_RATE, default 120/s). Fed at 400/s the rivet detector
 falls behind and frames are lost: legacy mode then reports different features without notice, tagged mode fails
 the scan with "missing frames" (the intended behaviour). The yardstick is equality with the legacy node.
+
+hole_detector runs here with max_roundness 0.10 (default 0.08), in both modes: the plate's 3 mm hole sits at the
+default limit, so whether it is accepted depends on where the 0.2 s cycles happen to cut the scan, with or without
+tagging (reproduced offline, without ROS). This check compares the two modes; it must not hinge on that hole.
+For the same reason a feature's reported position moves by about 0.1 mm between runs: positions are compared
+within POSITION_TOL_MM, and the feature type must match exactly.
 """
 
 import csv
@@ -48,6 +54,24 @@ def check(name, ok, detail=""):
     if not ok:
         FAILS.append(name)
     return ok
+
+
+# see the module docstring
+EXTRA_PARAMS = ["-p", "max_roundness:=0.10"] if PKG == "hole_detector" else []
+
+
+POSITION_TOL_MM = 0.5
+
+
+def covered(wanted, got):
+    """Every (y_mm, type) of `wanted` has its own entry in `got`: same type, y within the tolerance."""
+    left = list(got)
+    for y, kind in wanted:
+        match = next((g for g in left if g[1] == kind and abs(g[0] - y) <= POSITION_TOL_MM), None)
+        if match is None:
+            return False
+        left.remove(match)
+    return True
 
 
 def plate_profiles():
@@ -124,7 +148,8 @@ def legacy_positions(profiles):
     """Holes (y in mm, kind) the legacy node reports for the same frames (a next scan's index 0 ends it)."""
     exe = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/lib/{PKG}/{PKG}"
     params = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/share/{PKG}/config/params.yaml"
-    det = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(params), "-p", f"out_dir:={OUT}/legacy"],
+    det = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(params), "-p", f"out_dir:={OUT}/legacy",
+                            *EXTRA_PARAMS],
                            stdout=open(OUT / "legacy_detector.log", "w"), stderr=subprocess.STDOUT)
     node = rclpy.create_node("phase3_legacy_probe")
     found = []
@@ -160,7 +185,7 @@ def main():
     exe = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/lib/{PKG}/{PKG}"
     params = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/share/{PKG}/config/params.yaml"
     det = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(params), "-p", f"out_dir:={OUT}/det",
-                            "-p", "tagged:=true", "-p", "final_wait_s:=3.0"],
+                            "-p", "tagged:=true", "-p", "final_wait_s:=3.0", *EXTRA_PARAMS],
                            stdout=open(OUT / "detector.log", "w"), stderr=subprocess.STDOUT)
     p = Probe()
     legacy = legacy_positions(profiles)
@@ -178,8 +203,8 @@ def main():
         check("A finalized successfully, once", fa is not None and fa.success and len(p.final[a]) == 1,
               fa and (fa.success, fa.error))
         tagged_a = sorted((round(m.result.position_m[1] * 1000, 1), m.result.feature_type) for m in ra)
-        check("A: tagged mode reports exactly the legacy node's holes", tagged_a == legacy and legacy,
-              f"tagged {tagged_a}")
+        check("A: tagged mode reports the same features as the legacy node",
+              legacy and len(tagged_a) == len(legacy) and covered(legacy, tagged_a), f"tagged {tagged_a}")
         check("A: result_seq 0..n-1, feature ids 1..n",
               [m.result_seq for m in ra] == list(range(len(ra))) and [m.feature_id for m in ra] == list(
                   range(1, len(ra) + 1)), [(m.result_seq, m.feature_id) for m in ra])
@@ -211,7 +236,7 @@ def main():
               and len(p.final[b]) == 1, fb and fb.error)
         tagged_b = sorted((round(m.result.position_m[1] * 1000, 1), m.result.feature_type) for m in rb)
         check("B: the legacy holes well inside the scanned half, none beyond the scanned length",
-              set(inside) <= set(tagged_b) and all(y <= end_mm for y, _ in tagged_b), f"{tagged_b} vs {inside}")
+              covered(inside, tagged_b) and all(y <= end_mm for y, _ in tagged_b), f"{tagged_b} vs {inside}")
         check("B: counts consistent", fb is not None and fb.emitted_result_count == len(rb)
               and fb.frame_count == len(half))
 

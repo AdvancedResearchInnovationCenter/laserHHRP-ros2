@@ -1,7 +1,8 @@
 """Run each test of a detector test script separately (its __main__ order) and classify it:
 
   PASS    ran and passed
-  SKIP    the test returned after printing "skip ... not copied here" (its bags are absent): NOT a pass
+  SKIP    the test printed "skip ..." (e.g. "not copied here": a bag is absent), so all or part of it
+          did not run, however long it took: NOT a pass
   NODATA  the test needs a file or bag that is absent (FileNotFoundError, or rosbag2 "No storage could be
           initialized"): NOT a pass
   FAIL    anything else
@@ -32,7 +33,9 @@ def main() -> int:
             with contextlib.redirect_stdout(out):
                 eval(name, vars(t))
             skips = [line for line in out.getvalue().splitlines() if line.startswith("skip ")]
-            tag = "SKIP" if skips and time.time() - t0 < 0.5 else "PASS"
+            # any "skip" means part of the test did not run (e.g. one of its bags is absent), however long
+            # the rest took: never a pass (review of 78004e1)
+            tag = "SKIP" if skips else "PASS"
             print(f"{tag:<6} {name} ({time.time() - t0:.1f}s)" + (f"  [{'; '.join(skips)}]" if skips else ""))
         except (FileNotFoundError, OSError) as e:
             tag = "NODATA"

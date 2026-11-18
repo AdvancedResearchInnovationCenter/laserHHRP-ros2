@@ -22,6 +22,7 @@ class ScanFolder:
     def __init__(self, out_root, log):
         self.root, self.log, self.path = out_root, log, None
         self.jobs = queue.Queue(maxsize=64)        # full: save() waits (the disk is far behind)
+        self.errors, self.errors_lock = {}, threading.Lock()   # folder -> what could not be written
         threading.Thread(target=self.work, daemon=True).start()
 
     def work(self):
@@ -33,11 +34,21 @@ class ScanFolder:
                 write_pcd(path / name, points)
             except OSError as error:
                 self.log("could not save %s: %s" % (name, error))
+                self.note_error(path, "%s: %s" % (name, error.strerror or error))
             finally:
                 self.jobs.task_done()
 
     def close(self):
         self.jobs.join()
+
+    def note_error(self, path, what):
+        with self.errors_lock:
+            self.errors.setdefault(str(path), []).append(what)
+
+    def take_errors(self, path):
+        """Write failures recorded for one scan folder since the last call (call after close())."""
+        with self.errors_lock:
+            return self.errors.pop(str(path), [])
 
     def new_scan(self):
         self.path = None

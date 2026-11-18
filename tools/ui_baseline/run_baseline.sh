@@ -51,13 +51,13 @@ tail -1 "$OUT/launch_test.log"; record launch_test "$rc"
 
 echo "=== hole_detector (each test separately; SKIP/NODATA = bag not present, not a pass)"
 (cd "$REPO" && python3 "$HERE/run_tests_each.py" hole_detector/test/test_detector.py \
-  "test_launch_single_node();test_rviz_is_light();test_writer_drains();test_empty_cloud_is_ignored();test_synthetic_plate();test_downsample_matches_voxel_down(synthetic_plate());test_synthetic_incremental();test_reverse_scan();test_rejection_reported_once();test_crop_edge_is_not_a_rejection();test_surface_strips();test_band_slabs_on_tilted_plate();test_hole_markers();test_hole_near_scan_start();test_batch_matches_reference();test_real_bag_counts();test_replay_matches_baseline();test_boundary_margin();test_panel_bags();test_latency();test_bag_frames_rebuild()" \
+  "test_launch_single_node();test_write_failure_fails_the_scan();test_rviz_is_light();test_writer_drains();test_empty_cloud_is_ignored();test_synthetic_plate();test_downsample_matches_voxel_down(synthetic_plate());test_synthetic_incremental();test_reverse_scan();test_rejection_reported_once();test_crop_edge_is_not_a_rejection();test_surface_strips();test_band_slabs_on_tilted_plate();test_hole_markers();test_hole_near_scan_start();test_batch_matches_reference();test_real_bag_counts();test_replay_matches_baseline();test_boundary_margin();test_panel_bags();test_latency();test_bag_frames_rebuild()" \
   > "$OUT/hole_tests.log" 2>&1); rc=$?
 grep -E "^(PASS|FAIL|NODATA|SKIP|summary)" "$OUT/hole_tests.log"; record hole_detector "$rc"
 
 echo "=== rivet_detector (each test separately)"
 (cd "$REPO" && python3 "$HERE/run_tests_each.py" rivet_detector/test/test_rivets.py \
-  "test_launch_single_node();test_rviz_is_light();test_synthetic_batch();test_side_clip(synthetic_panel());test_downsample_matches_voxel_down(synthetic_panel());test_synthetic_both_signs(synthetic_panel());test_synthetic_incremental(synthetic_panel());test_boundary_is_raw(synthetic_panel(), test_synthetic_incremental(synthetic_panel()));test_results_have_no_nan(test_synthetic_incremental(synthetic_panel()));test_panel2_bags();test_panel_bags_generic();test_latency()" \
+  "test_launch_single_node();test_write_failure_fails_the_scan();test_rviz_is_light();test_synthetic_batch();test_side_clip(synthetic_panel());test_downsample_matches_voxel_down(synthetic_panel());test_synthetic_both_signs(synthetic_panel());test_synthetic_incremental(synthetic_panel());test_boundary_is_raw(synthetic_panel(), test_synthetic_incremental(synthetic_panel()));test_results_have_no_nan(test_synthetic_incremental(synthetic_panel()));test_panel2_bags();test_panel_bags_generic();test_latency()" \
   > "$OUT/rivet_tests.log" 2>&1); rc=$?
 grep -E "^(PASS|FAIL|NODATA|SKIP|summary)" "$OUT/rivet_tests.log"; record rivet_detector "$rc"
 

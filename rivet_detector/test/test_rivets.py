@@ -280,8 +280,70 @@ def test_synthetic_both_signs(points):
             assert abs(rivet.height - sign * height) < 0.00003, (sign, rivet.height)
 
 
+def test_write_failure_fails_the_scan(tmp=Path("/tmp/rivet_detector_write_fail_test")):
+    """Review of 78004e1 #3: a result file (CSV row, PCD) or scan folder that cannot be written makes the scan's
+    DetectionFinalized fail with the reason; a scan whose files were all written still succeeds."""
+    import os
+    import shutil
+    import threading
+    from rivet_detector import node
+    from rivet_detector import results as res
+    if node.DetectionFinalized is None:
+        print("skip test_write_failure_fails_the_scan: laser_hhrp messages not built / sourced")
+        return
+    if os.geteuid() == 0:
+        print("skip test_write_failure_fails_the_scan: root ignores file permissions")
+        return
+    from builtin_interfaces.msg import Time
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    published, logged = [], []
+    folder = res.ScanFolder(tmp, log=logged.append)
+    stub = SimpleNamespace(
+        folder=folder, lock=threading.Lock(), jobs={}, done_ids=[], params=dict(DEFAULTS),
+        pub_final=SimpleNamespace(publish=published.append),
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(to_msg=Time)),
+        get_logger=lambda: SimpleNamespace(info=logged.append, error=logged.append))
+    Detector = node.RivetDetector
+
+    def one(i):
+        return SimpleNamespace(id=i, centre=np.array([0.0, i * 0.01, 0.07]), radius=0.004, rms=1e-5, height=1e-5,
+                               coverage=1.0, countersunk=True, partial=False, scanned_share=1.0,
+                               boundary=np.zeros((10, 3)))
+
+    def finalize(scan_id, before_save=None):
+        job = Detector.job_for(stub, scan_id)
+        if before_save:
+            before_save(job.path)
+        if job.path.is_dir():
+            folder.path = job.path
+            folder.save(one(1), None)
+        Detector.finalize_job(stub, job, True, "")
+        return published[-1]
+
+    try:
+        ok = finalize("scan-ok")
+        assert ok.success and ok.error == "" and (tmp / "scan-ok" / "rivet_01.pcd").exists(), ok.error
+
+        def read_only(path):
+            (path / "summary.csv").chmod(0o444)
+            path.chmod(0o555)
+        bad = finalize("scan-read-only", read_only)
+        assert not bad.success and "could not save" in bad.error and "rivet_01.pcd" in bad.error, bad.error
+
+        tmp.chmod(0o555)                           # the scan folder itself cannot be created
+        nofolder = finalize("scan-no-folder")
+        assert not nofolder.success and "scan folder" in nofolder.error, nofolder.error
+        assert folder.take_errors(tmp / "scan-ok") == []        # errors never leak into another scan
+    finally:
+        tmp.chmod(0o755)
+        if (tmp / "scan-read-only").exists():
+            (tmp / "scan-read-only").chmod(0o755)
+        shutil.rmtree(tmp, ignore_errors=True)
+
 if __name__ == "__main__":
     test_launch_single_node()
+    test_write_failure_fails_the_scan()
     test_rviz_is_light()
     panel = test_synthetic_batch()
     test_side_clip(panel)

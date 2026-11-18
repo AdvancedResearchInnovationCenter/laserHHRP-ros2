@@ -32,7 +32,8 @@ ros2 bag play /bags/panel2_09112026_02 --topics /scan/frame
 and frames 0..n-1 are all in, the last frames get their detection pass, the files are flushed and exactly one
 `/inspection/detection_finalized` is published, without waiting for a next scan. Results also go to
 `/inspection/result_tagged` (numbered per scan). Missing frames fail the scan after `final_wait_s` (10 s);
-a frame stream closed with an error fails it too. The legacy `/inspection/result` is still published.
+a frame stream closed with an error fails it too. A result file (CSV row, PCD) or scan folder that cannot be
+written also fails the scan, with the reason in `DetectionFinalized.error`. The legacy `/inspection/result` is still published.
 
 ## Parameters (`config/params.yaml`, mm)
 
