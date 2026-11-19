@@ -50,7 +50,7 @@
     speed.stall_timeout_s: 2.0
 
     # ---- system ----
-    system.tilt_limit_rad: 0.087     # 5 deg
+    system.tilt_limit_rad: 3.2       # off (> 180 deg): the device rides rigidly on the part, and tilt is only relative to the calibration pose. 0.087 = 5 deg to re-enable
     system.vibration_limit_radps: 1.0
     system.storage_path: ~/laser_hhrp/scans
     system.storage_min_free_mb: 500.0
