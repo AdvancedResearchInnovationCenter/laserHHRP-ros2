@@ -32,7 +32,12 @@ pts = td.synthetic_plate(); pts = pts[np.argsort(pts[:, 1], kind="stable")]
 ys = np.unique(pts[:, 1]); b = np.searchsorted(pts[:, 1], ys); ends = list(b[1:]) + [len(pts)]
 w = rosbag2_py.SequentialWriter()
 w.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"), rosbag2_py.ConverterOptions("cdr", "cdr"))
-w.create_topic(rosbag2_py.TopicMetadata(name="/scan/frame", type="laser_hhrp/msg/ScanFrame", serialization_format="cdr"))
+topic = dict(name="/scan/frame", type="laser_hhrp/msg/ScanFrame", serialization_format="cdr")
+try:
+    meta = rosbag2_py.TopicMetadata(id=0, **topic)      # Jazzy
+except TypeError:
+    meta = rosbag2_py.TopicMetadata(**topic)            # Humble
+w.create_topic(meta)
 t = 1_000_000_000
 for scan_len in (len(ys), len(ys) // 2):                 # scan 1: whole plate, scan 2: first half
     for i in range(scan_len):
@@ -47,11 +52,14 @@ print(f"wrote {bag}")
 EOF
 "$HHRP_WS/install/hole_detector/lib/hole_detector/hole_detector" --ros-args \
   --params-file "$HHRP_WS/install/hole_detector/share/hole_detector/config/params.yaml" \
-  -p out_dir:="$OUT/det" -p tagged:=true > "$OUT/detector.log" 2>&1 &
+  -p out_dir:="$OUT/det" -p tagged:=true -p max_roundness:=0.10 > "$OUT/detector.log" 2>&1 &   # see phase3_detector_check.py
 DET=$!
 timeout 300 python3 -u "$HERE/legacy_bag_adapter.py" "$OUT/bag" 2>&1 | tee "$OUT/adapter.log"
 RC=${PIPESTATUS[0]}
-kill -INT "$DET" 2>/dev/null; wait "$DET" 2>/dev/null
+# bounded stop: a background job of a script ignores SIGINT unless the node already installed its handler
+kill -INT "$DET" 2>/dev/null
+for _ in $(seq 1 30); do kill -0 "$DET" 2>/dev/null || break; sleep 0.5; done
+kill -KILL "$DET" 2>/dev/null; wait "$DET" 2>/dev/null
 grep -q "scan 1 .* ok, 7 results, 3 targets" "$OUT/adapter.log" || { echo "FAIL  scan 1 should give 7 holes, 3 countersinks"; RC=1; }
 [ "$RC" = 0 ] && echo "PASS  legacy bag replayed through the tagged path" || echo "FAIL  (logs: $OUT)"
 exit "$RC"

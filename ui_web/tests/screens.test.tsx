@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Result } from "../src/api/client";
 import type { Snapshot } from "../src/api/types";
 import { Shell } from "../src/App";
+import { Identify } from "../src/screens/Identify";
 import { FeatureDetail } from "../src/ui/FeatureDetail";
 import { FeatureMap } from "../src/ui/FeatureMap";
 import type { Run } from "../src/screens/common";
@@ -24,11 +25,20 @@ export const tests: Test[] = [
     assert.ok(/<button[^>]*disabled[^>]*>Continue<\/button>/.test(m), "Continue must start disabled");
     assert.ok(buttons(m).includes("Q") && buttons(m).includes("0") && buttons(m).includes("-"));
   }],
-  ["setup: both modes offered; measurement stated as not measured", () => {
-    const m = text(html(snapshot({ screen: "setup", inspection: null })));
-    assert.includes(m, "CSK Depth");
-    assert.includes(m, "Rivet Flushness");
-    assert.includes(m, "not measured in this version");
+  ["identify: no way back without a previous operator; Back to <id> after Change operator", () => {
+    const plain = renderToStaticMarkup(<Identify run={run} />);
+    assert.ok(!buttons(plain).some((b) => b.startsWith("‹ Back")), "no Back button on a fresh identification");
+    const back = renderToStaticMarkup(<Identify run={run} previous="ENG-1042" />);
+    assert.ok(buttons(back).includes("‹ Back to ENG-1042"), "Back to the previous operator offered");
+  }],
+  ["setup: each mode card is a figure with a short label, no detail text", () => {
+    const m = html(snapshot({ screen: "setup", inspection: null }));
+    const cards = [...m.matchAll(/<button[^>]*class="mode-card[^"]*"[^>]*>(.*?)<\/button>/g)].map((c) => c[1]);
+    assert.equal(cards.length, 2);
+    assert.ok(cards[0].includes('data-testid="figure-csk_depth"') && cards[1].includes('data-testid="figure-rivet_flushness"'),
+              "a figure in each card");
+    assert.equal(text(cards[0]).trim(), "Countersink Depth");
+    assert.equal(text(cards[1]).trim(), "Rivet Flushness");
   }],
   ["ready: hold-the-switch prompt; no on-screen start / stop", () => {
     const m = html(snapshot());
@@ -125,6 +135,12 @@ export const tests: Test[] = [
     assert.includes(m, 'class="feat other');
     assert.includes(m, "+Y");
     assert.includes(m, "+X");
+  }],
+  ["header: a light / dark switch on every screen", () => {
+    for (const screen of ["identify", "setup", "ready", "scanning", "results"] as const) {
+      const m = html(snapshot({ screen }));
+      assert.ok(/<button[^>]*aria-label="Light mode"[^>]*data-testid="theme-toggle"/.test(m), `theme switch on ${screen}`);
+    }
   }],
   ["header: clock not verified and offline are visible", () => {
     let m = text(html(snapshot({ clock_quality: "unverified" })));

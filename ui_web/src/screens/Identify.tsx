@@ -5,10 +5,16 @@ import type { Run } from "./common";
 
 const VALID = /^[A-Za-z0-9_-]{1,32}$/;    // hint only; the backend validates
 
-export function Identify({ run }: { run: Run }) {
+/** `previous`: the operator who just tapped Change operator, offered as a way back until anyone logs in. */
+export function Identify({ run, previous }: { run: Run; previous?: string | null }) {
   const [id, setId] = useState("");
   return (
     <div className="screen identify">
+      {previous && (
+        <button className="secondary id-back" onClick={() => void run(api.setOperator(previous))}>
+          ‹ Back to {previous}
+        </button>
+      )}
       <div className="id-top">
         <div>
           <h1>Operator identification</h1>

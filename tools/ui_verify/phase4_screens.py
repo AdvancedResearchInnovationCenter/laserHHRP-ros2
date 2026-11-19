@@ -17,6 +17,7 @@ import argparse
 import base64
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -65,17 +66,46 @@ class Api:
         raise TimeoutError(f"backend never reached: {what} (screen {self.state().get('screen')})")
 
 
+def browser_path() -> str:
+    return os.environ.get("PATH", "") + os.pathsep + "/snap/bin"    # often missing from a non-login PATH
+
+
+def find_browser() -> str | None:
+    """A Chromium-family browser (Ubuntu's Chromium is a snap)."""
+    return next((found for name in ("chromium", "chromium-browser", "google-chrome", "brave-browser")
+                 if (found := shutil.which(name, path=browser_path()))), None)
+
+
+def is_snap(exe: str) -> bool:
+    return "/snap/" in (shutil.which(exe, path=browser_path()) or exe)
+
+
+def real_home() -> Path:
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)      # the checks may have moved $HOME to a scratch folder
+
+
+def new_profile(exe: str) -> Path:
+    """A throwaway browser profile. Snap confinement hides /tmp and hidden folders from the browser."""
+    if is_snap(exe):
+        base = real_home() / "snap" / "chromium" / "common"
+        base.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="hhrp-ui-browser-", dir=base))
+    return Path(tempfile.mkdtemp(prefix="hhrp-ui-browser-"))
+
+
 class Browser:
     """Minimal Chrome DevTools Protocol client."""
 
     def __init__(self, exe: str, profile: Path):
+        exe = shutil.which(exe, path=browser_path()) or exe
+        env = dict(os.environ, HOME=str(real_home())) if is_snap(exe) else None
         self.proc = subprocess.Popen(
             [exe, "--headless=new", "--remote-debugging-port=0", f"--user-data-dir={profile}", "--no-first-run",
              "--no-default-browser-check", "--disable-gpu", "--hide-scrollbars", "--window-size=800,480",
              "--disable-extensions", "--disable-sync", "--mute-audio", "about:blank"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         port_file = profile / "DevToolsActivePort"
-        end = time.monotonic() + 20
+        end = time.monotonic() + 60                 # a snap's first start on the Pi is slow
         while not port_file.exists():
             if time.monotonic() > end or self.proc.poll() is not None:
                 raise RuntimeError("browser did not start")
@@ -211,7 +241,7 @@ def screen(api: Api) -> str:
 def run(base: str, browser_exe: str, out: Path) -> int:
     out.mkdir(parents=True, exist_ok=True)
     api = Api(base)
-    profile = Path(tempfile.mkdtemp(prefix="hhrp-ui-browser-"))
+    profile = new_profile(browser_exe)
     b = Browser(browser_exe, profile)
     try:
         b.send("Page.navigate", url=base + "/?kiosk")
@@ -228,7 +258,18 @@ def run(base: str, browser_exe: str, out: Path) -> int:
 
         # ---- 2 Setup ----
         b.wait_text("Start inspection")
-        b.tap("CSK Depth", exact=False)
+        check(b.js("[...document.querySelectorAll('.mode-card')].map(c => c.querySelector('svg.mode-figure') ? c.innerText.trim() : '').join('|')")
+              == "Countersink Depth|Rivet Flushness", "setup: each mode card is a figure with a short label")
+        # Change operator by mistake -> Back to the same operator, no ID typed
+        b.tap("Change operator", exact=False)
+        b.wait_text("Back to ENG-1042")
+        check(api.state()["operator"] is None, "setup: Change operator logs out")
+        layout_ok(b, "identify (back offered)")
+        b.shot(out, "01b-identify-back")
+        b.tap("‹ Back to ENG-1042")
+        b.wait_text("Start inspection")
+        check((api.state()["operator"] or {}).get("operator_id") == "ENG-1042", "identify: Back returns to the same operator")
+        b.tap("Countersink Depth", exact=False)
         layout_ok(b, "setup")
         b.shot(out, "02-setup")
         b.tap("Start inspection")
@@ -297,6 +338,18 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         layout_ok(b, "results (feature selected)")
         b.shot(out, "09-results-feature")
         no_fake_pass.append(b.text())
+        # light theme: the faint header switch, remembered across a reload
+        dark_bg = b.js("getComputedStyle(document.body).backgroundColor")
+        b.tap("◐")
+        check(b.js("document.documentElement.dataset.theme") == "light"
+              and b.js("getComputedStyle(document.body).backgroundColor") != dark_bg, "theme: header switch turns light mode on")
+        layout_ok(b, "results (light)")
+        b.shot(out, "09b-results-light")
+        b.send("Page.reload")
+        b.wait_button("Accept")
+        check(b.js("document.documentElement.dataset.theme") == "light", "theme: light mode remembered after a reload")
+        b.tap("◐")
+        check(b.js("document.documentElement.dataset.theme") == "dark", "theme: switch turns dark mode back on")
         b.tap("Accept")
         b.wait_text("Hold the switch to scan")
         check(api.state()["recent_scans"][0]["status"] == "accepted", "results: Accept recorded")
@@ -498,7 +551,7 @@ def run(base: str, browser_exe: str, out: Path) -> int:
 
 def offline_shot(base: str, browser_exe: str, out: Path, kill) -> None:
     """Separate pass: open the UI, stop the backend, screenshot the offline notice."""
-    profile = Path(tempfile.mkdtemp(prefix="hhrp-ui-browser-"))
+    profile = new_profile(browser_exe)
     b = Browser(browser_exe, profile)
     try:
         b.send("Page.navigate", url=base + "/?kiosk")
@@ -519,8 +572,7 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--backend-pid", type=int, default=None, help="stopped at the end for the offline screen")
     a = ap.parse_args()
-    exe = a.browser or next((e for e in ("chromium", "chromium-browser", "google-chrome", "brave-browser")
-                             if shutil.which(e)), None)
+    exe = a.browser or find_browser()
     if not exe:
         print("no Chromium-family browser found", file=sys.stderr)
         return 3

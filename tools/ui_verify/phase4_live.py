@@ -6,8 +6,8 @@ features; detections through the live path are covered by the Phase 3 checks.
 """
 
 import os
+import shutil
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -16,7 +16,7 @@ import rclpy
 from std_srvs.srv import Trigger
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from phase4_screens import RESULTS, Api, Browser, check, layout_ok  # noqa: E402
+from phase4_screens import RESULTS, Api, Browser, check, find_browser, layout_ok, new_profile  # noqa: E402
 
 BASE = os.environ.get("UI_BASE", "http://127.0.0.1:8098")
 
@@ -47,9 +47,8 @@ def main(out: Path) -> int:
     api = Api(BASE)
     api.wait(lambda s: True, "backend up", 60)
     p = Probe()
-    exe = next(e for e in ("chromium", "chromium-browser", "google-chrome", "brave-browser")
-               if __import__("shutil").which(e))
-    profile = Path(tempfile.mkdtemp(prefix="hhrp-ui-browser-"))
+    exe = os.environ.get("BROWSER") or find_browser()
+    profile = new_profile(exe)
     b = Browser(exe, profile)
     try:
         check(api.state()["source"] == "ros", "backend runs on the live ROS source")
@@ -58,7 +57,7 @@ def main(out: Path) -> int:
         b.type_keys("ENG-1042")
         b.tap("Continue")
         b.wait_text("Start inspection")
-        b.tap("CSK Depth", exact=False)
+        b.tap("Countersink Depth", exact=False)
         b.tap("Start inspection")
         api.wait(lambda s: s["detector"]["ready"], "hole_detector ready", 60)
         end = time.monotonic() + 15                      # the probe's view of the ROS graph lags
@@ -160,7 +159,6 @@ def main(out: Path) -> int:
         check(False, f"step failed: {e}")
     finally:
         b.close()
-        import shutil
         shutil.rmtree(profile, ignore_errors=True)
     failed = [w for ok, w in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks passed; screenshots in {out}")

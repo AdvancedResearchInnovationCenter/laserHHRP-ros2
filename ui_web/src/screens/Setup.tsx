@@ -1,19 +1,18 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import type { Mode, Snapshot } from "../api/types";
-import { MODE_DETAIL, MODE_LABEL } from "../lib/format";
 import { Keyboard } from "../ui/Keyboard";
+import { ModeFigure } from "../ui/ModeFigure";
 import { Modal } from "../ui/Modal";
 import type { Run } from "./common";
 
 const VALID = /^[A-Za-z0-9_-]{1,64}$/;
 const MODES: Mode[] = ["csk_depth", "rivet_flushness"];
-const MEASURE_NOTE: Record<Mode, string> = {
-  csk_depth: "Countersink depth: not measured in this version",
-  rivet_flushness: "Flushness: not measured in this version",
-};
+const CARD_LABEL: Record<Mode, string> = { csk_depth: "Countersink Depth", rivet_flushness: "Rivet Flushness" };
 
-export function Setup({ snap, run, openPast }: { snap: Snapshot; run: Run; openPast: () => void }) {
+export function Setup({ snap, run, openPast, onChangeOperator }: {
+  snap: Snapshot; run: Run; openPast: () => void; onChangeOperator: () => void;
+}) {
   const [mode, setMode] = useState<Mode | null>(null);
   const [label, setLabel] = useState("");
   const [draft, setDraft] = useState<string | null>(null);
@@ -39,15 +38,14 @@ export function Setup({ snap, run, openPast }: { snap: Snapshot; run: Run; openP
         {MODES.map((m) => (
           <button key={m} className={mode === m ? "mode-card on" : "mode-card"} aria-pressed={mode === m}
                   onClick={() => setMode(m)}>
-            <span className="mode-title">{MODE_LABEL[m]}</span>
-            <span className="mode-detail">{MODE_DETAIL[m]}</span>
-            <span className="mode-note">{MEASURE_NOTE[m]}</span>
+            <ModeFigure mode={m} />
+            <span className="mode-title">{CARD_LABEL[m]}</span>
           </button>
         ))}
       </div>
       <p className="muted small">The mode is fixed for the whole inspection. A different mode needs a new inspection.</p>
       <div className="bar">
-        <button className="secondary" onClick={() => void run(api.logout())}>
+        <button className="secondary" onClick={onChangeOperator}>
           Change operator ({snap.operator?.operator_id})
         </button>
         <button className="secondary" onClick={openPast}>Past inspections</button>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Screen, Snapshot } from "../api/types";
 import { MODE_LABEL, type Tone } from "../lib/format";
+import { applyTheme, currentTheme, saveTheme, type Theme } from "../lib/theme";
 import { Modal } from "./Modal";
 
 export const SCREEN_PILL: Record<Screen, { label: string; tone: Tone }> = {
@@ -48,6 +49,7 @@ export function Header({ snap, connected }: { snap: Snapshot; connected: boolean
         </button>
       )}
       <span className={`conn ${connected ? "on" : "off"}`} title={connected ? "Connected" : "Disconnected"} />
+      <ThemeToggle />
       {open && (
         <Modal title="Alerts and warnings" onClose={() => setOpen(false)}>
           <ul className="alert-list">
@@ -56,6 +58,18 @@ export function Header({ snap, connected }: { snap: Snapshot; connected: boolean
         </Modal>
       )}
     </header>
+  );
+}
+
+/** Small, faint light / dark switch; the choice is remembered in this browser. */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(currentTheme);
+  const next: Theme = theme === "dark" ? "light" : "dark";
+  return (
+    <button className="hdr-theme" aria-label={next === "light" ? "Light mode" : "Dark mode"} data-testid="theme-toggle"
+            onClick={() => { applyTheme(next); saveTheme(next); setTheme(next); }}>
+      ◐
+    </button>
   );
 }
 

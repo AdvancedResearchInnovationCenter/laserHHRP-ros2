@@ -44,6 +44,17 @@ export function Shell({ snap, connected, run, toast }: {
   snap: Snapshot; connected: boolean; run: Run; toast?: string | null;
 }) {
   const [overlay, setOverlay] = useState<Overlay>(null);
+  // Who tapped Change operator: Identification offers "Back to" them until anyone logs in.
+  const [previous, setPrevious] = useState<string | null>(null);
+  const operatorId = snap.operator?.operator_id ?? null;
+  useEffect(() => {
+    if (operatorId) setPrevious(null);
+  }, [operatorId]);
+  const changeOperator = async () => {
+    const id = operatorId;
+    const r = await run(api.logout());
+    if (r.ok && id) setPrevious(id);
+  };
   // A physical scan start (or a sign-out) always takes over the screen.
   useEffect(() => {
     if (snap.screen === "scanning" || snap.screen === "identify") setOverlay(null);
@@ -58,7 +69,8 @@ export function Shell({ snap, connected, run, toast }: {
     body = <PastInspections onBack={() => setOverlay(null)}
                             onOpen={(uuid) => setOverlay({ kind: "history", uuid, back: { kind: "past" } })} />;
   } else {
-    body = <Body snap={snap} run={run} openHistory={openHistory} openPast={() => setOverlay({ kind: "past" })} />;
+    body = <Body snap={snap} run={run} openHistory={openHistory} openPast={() => setOverlay({ kind: "past" })}
+                 previous={previous} changeOperator={() => void changeOperator()} />;
   }
   const kiosk = typeof location !== "undefined" && new URLSearchParams(location.search).has("kiosk");
   const dev = snap.source === "mock" && !kiosk;
@@ -80,15 +92,16 @@ export function Shell({ snap, connected, run, toast }: {
   );
 }
 
-function Body({ snap, run, openHistory, openPast }: {
+function Body({ snap, run, openHistory, openPast, previous, changeOperator }: {
   snap: Snapshot; run: Run; openHistory: () => void; openPast: () => void;
+  previous: string | null; changeOperator: () => void;
 }) {
   const scanKey = snap.current_scan?.scan_id ?? "none";
   switch (snap.screen) {
     case "identify":
-      return <Identify run={run} />;
+      return <Identify run={run} previous={previous} />;
     case "setup":
-      return <Setup snap={snap} run={run} openPast={openPast} />;
+      return <Setup snap={snap} run={run} openPast={openPast} onChangeOperator={changeOperator} />;
     case "ready":
     case "not_ready":
       return <Ready key={snap.inspection?.uuid} snap={snap} run={run} openHistory={openHistory} />;

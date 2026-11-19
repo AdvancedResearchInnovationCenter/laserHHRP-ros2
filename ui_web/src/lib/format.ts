@@ -2,10 +2,6 @@
 import type { Mode, Scan, ScanStatus } from "../api/types";
 
 export const MODE_LABEL: Record<Mode, string> = { csk_depth: "CSK Depth", rivet_flushness: "Rivet Flushness" };
-export const MODE_DETAIL: Record<Mode, string> = {
-  csk_depth: "Countersunk holes · hole_detector",
-  rivet_flushness: "Rivet heads · rivet_detector",
-};
 export const TARGET_NOUN: Record<Mode, [string, string]> = {
   csk_depth: ["countersink", "countersinks"],
   rivet_flushness: ["rivet", "rivets"],
