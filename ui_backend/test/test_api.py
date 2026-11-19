@@ -149,3 +149,25 @@ def test_no_scan_control_without_mock(tmp_path):
         client.post(P + "/inspections", json={"mode": "csk_depth"})
         s = state(client)
         assert s["screen"] == "not_ready" and "ROS bridge not running" in s["not_ready_reasons"]
+
+
+def test_web_page_is_revalidated_and_hashed_assets_are_cached(tmp_path):
+    """An updated UI must show on the next load: the page is never reused unchecked (the kiosk kept an old
+    build after an update); content-hashed assets may be kept for good."""
+    web = tmp_path / "dist"
+    (web / "assets").mkdir(parents=True)
+    (web / "index.html").write_text('<script src="/assets/index-abc123.js"></script>')
+    (web / "assets" / "index-abc123.js").write_text("console.log(1)")
+    app, *_ = build(tmp_path / "ui.db", mock=True, clock=Clock("synced"), static_dir=web)
+    with TestClient(app) as client:
+        for url in ("/", "/index.html"):
+            r = client.get(url)
+            assert r.status_code == 200 and "index-abc123.js" in r.text
+            assert r.headers["cache-control"] == "no-cache", url
+            again = client.get(url, headers={"if-none-match": r.headers["etag"]})
+            assert again.status_code == 304 and again.headers["cache-control"] == "no-cache", url
+        r = client.get("/assets/index-abc123.js")
+        assert r.status_code == 200
+        assert r.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert "cache-control" not in client.get(P + "/health").headers
+        assert client.get("/assets/missing.js").status_code == 404

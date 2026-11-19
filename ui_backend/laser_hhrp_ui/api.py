@@ -287,10 +287,31 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
             return {"started": name}
 
     if static_dir and Path(static_dir).is_dir():
-        from fastapi.staticfiles import StaticFiles
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="web")
+        app.mount("/", _web_files(static_dir), name="web")
 
     return app
+
+
+# Built frontend caching. Without a Cache-Control header the browser guesses that its saved page is still
+# fresh and does not ask again, so an updated UI did not appear in the kiosk (whose profile survives
+# reboots). The page is revalidated on every load (a 304 when unchanged); Vite puts a content hash in every
+# name under assets/, so those files never change and are kept for good.
+PAGE_CACHE = "no-cache"
+ASSET_CACHE = "public, max-age=31536000, immutable"
+
+
+def _web_files(directory):
+    from fastapi.staticfiles import StaticFiles
+
+    class WebFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            response = await super().get_response(path, scope)
+            if response.status_code in (200, 304):
+                hashed = path.replace("\\", "/").startswith("assets/")
+                response.headers["Cache-Control"] = ASSET_CACHE if hashed else PAGE_CACHE
+            return response
+
+    return WebFiles(directory=str(directory), html=True)
 
 
 async def _read_until_closed(websocket: WebSocket) -> None:
