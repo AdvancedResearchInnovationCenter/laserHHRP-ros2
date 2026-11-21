@@ -20,13 +20,30 @@ set_session() {  # name type
 if [ "${1:-}" = "--undo" ]; then
   set_session ubuntu ""
   rm -f "$SESSION"
-  echo "Done: the next login is the Ubuntu desktop (the GNOME autostart runs start_hardware.sh)."
+  AUTO="$(getent passwd "$USER_NAME" | cut -d: -f6)/.config/autostart/hhrp-operator-ui.desktop"
+  [ -f "$AUTO" ] && sed -i 's/^X-GNOME-Autostart-enabled=.*/X-GNOME-Autostart-enabled=true/' "$AUTO"
+  echo "Done: the next login is the Ubuntu desktop (its autostart runs start_hardware.sh again)."
   exit 0
 fi
 
 grep -qi '^AutomaticLoginEnable *= *true' /etc/gdm3/custom.conf || echo "WARNING: GDM autologin is not on" >&2
 command -v cage >/dev/null || apt-get install -y cage
 chmod +x "$HERE/kiosk-session.sh" "$HERE/kiosk-browser.sh"
+HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+# Service menu PIN (developers): created once with 2580; change it with: echo 1234 > <file>
+PIN="$HOME_DIR/aric_ws/operator_ui/service_pin"
+if [ ! -f "$PIN" ]; then
+  install -D -o "$USER_NAME" -g "$USER_NAME" -m 600 /dev/null "$PIN"
+  echo 2580 > "$PIN"
+  echo "service PIN 2580 written to $PIN: change it"
+fi
+# The old GNOME autostart of start_hardware.sh would start the scanner software again in desktop mode.
+AUTO="$HOME_DIR/.config/autostart/hhrp-operator-ui.desktop"
+if [ -f "$AUTO" ] && ! grep -q '^X-GNOME-Autostart-enabled=false' "$AUTO"; then
+  sed -i 's/^X-GNOME-Autostart-enabled=.*/X-GNOME-Autostart-enabled=false/' "$AUTO"
+  grep -q '^X-GNOME-Autostart-enabled=' "$AUTO" || echo 'X-GNOME-Autostart-enabled=false' >> "$AUTO"
+  echo "GNOME autostart of start_hardware.sh turned off ($AUTO)"
+fi
 cat > "$SESSION" <<DESKTOP
 [Desktop Entry]
 Name=Laser roller operator screen

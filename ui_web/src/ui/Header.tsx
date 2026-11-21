@@ -3,7 +3,7 @@ import type { Screen, Snapshot } from "../api/types";
 import { MODE_LABEL, type Tone } from "../lib/format";
 import { applyTheme, currentTheme, saveTheme, type Theme } from "../lib/theme";
 import type { Run } from "../screens/common";
-import { offerPowerOff, PowerButton } from "./Device";
+import { MenuButton, offerMenu } from "./Device";
 import { Modal } from "./Modal";
 
 export const SCREEN_PILL: Record<Screen, { label: string; tone: Tone }> = {
@@ -31,6 +31,7 @@ export function Header({ snap, connected, run }: { snap: Snapshot; connected: bo
   const [open, setOpen] = useState(false);
   const items = alertItems(snap);
   const pill = snap.device.powering_off ? { label: "TURNING OFF", tone: "warn" as Tone }
+    : snap.device.switching ? { label: "SERVICE", tone: "warn" as Tone }
     : connected ? SCREEN_PILL[snap.screen] : { label: "OFFLINE", tone: "bad" as Tone };
   return (
     <header className="hdr">
@@ -51,7 +52,7 @@ export function Header({ snap, connected, run }: { snap: Snapshot; connected: bo
           ⚠ {items.length}
         </button>
       )}
-      {run && offerPowerOff(snap, connected) && <PowerButton run={run} />}
+      {run && offerMenu(snap, connected) && <MenuButton snap={snap} run={run} />}
       <span className={`conn ${connected ? "on" : "off"}`} title={connected ? "Connected" : "Disconnected"} />
       <ThemeToggle />
       {open && (

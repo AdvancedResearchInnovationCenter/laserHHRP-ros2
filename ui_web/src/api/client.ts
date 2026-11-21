@@ -1,4 +1,4 @@
-import type { ApiError, Inspection, Scan, UsbTarget } from "./types";
+import type { ApiError, Inspection, NetworkDevice, Scan, UsbTarget } from "./types";
 
 const P = "/api/v1";
 
@@ -41,6 +41,9 @@ export const api = {
   // the backend refuses both during a scan (and power off while an analysis is pending)
   calibrate: () => call<{ started: boolean; message: string }>("POST", "/device/calibrate"),
   powerOff: () => call<{ powering_off: boolean }>("POST", "/device/power-off"),
+  // developer service menu: every call carries the PIN
+  serviceUnlock: (pin: string) => call<{ network: NetworkDevice[] }>("POST", "/device/service/unlock", { pin }),
+  service: (kind: "desktop" | "restart", pin: string) => call<{ switching: string }>("POST", `/device/service/${kind}`, { pin }),
   // GET download: the browser saves the file; nothing is written on the server
   csvUrl: (uuid: string) => `${P}/inspections/${uuid}/export.csv`,
   usbTargets: () => call<{ targets: UsbTarget[]; roots: string[] }>("GET", "/exports/usb"),

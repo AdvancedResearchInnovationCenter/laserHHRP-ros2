@@ -125,6 +125,8 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
 | `PATCH /api/v1/inspections/{uuid}/next-expected-count` | `{count}` | 1..500, only on Ready / Not ready |
 | `POST /api/v1/detector/restart` | | explicit recovery after a detector crash or failed start |
 | `POST /api/v1/device/calibrate` | | gyro calibration (`calibration/start`); 409 during a scan, while one runs, without current hardware status; the outcome comes in `hardware.calibrating` / `hardware.message` |
+| `POST /api/v1/device/service/unlock` | `{pin}` | developers' service menu (kiosk: `--service-pin-file`, `--kiosk-control`): checks the PIN (403 wrong, 429 after 5 wrong for 60 s), returns `{network}` |
+| `POST /api/v1/device/service/{desktop\|restart}` | `{pin}` | writes the request for the kiosk session (`deploy/kiosk`); 409 during a scan or a pending analysis; `device.switching` until the backend stops |
 | `POST /api/v1/device/power-off` | | runs `--power-off-command` (e.g. `systemctl poweroff`); 409 during a scan or a pending analysis or when not configured; `device.powering_off` until the system stops the backend; a repeated call runs nothing |
 | `GET /api/v1/inspections/{uuid}/scans` | | history, oldest first |
 | `GET /api/v1/scans/{scan_id}` | | scan with features |
@@ -147,7 +149,8 @@ scanned share, fit RMS, measurement name/status/value, `measurement_verdict` (in
 `limit_lower_mm`, `limit_upper_mm`, `measurement_reason`. Free-text cells that start with `= + - @` get a leading `'`.
 **No endpoint starts or stops the physical scan.** `/api/v1/dev/mock/*` (press, release, scenario,
 fault, hardware, layout, power-on) exist **only with `--mock`** (the mock calibrates in 2 s and turns nothing off).
-`snapshot.device` = `{can_calibrate, can_power_off, powering_off}`: which device actions the screens offer.
+`snapshot.device` = `{can_calibrate, can_power_off, powering_off, can_service, switching}`: which device actions the
+screens offer. The mock's service PIN is `2580` (file next to `--db`).
 
 **Envelope:** `{version: 1, event_seq, type, timestamp, inspection_id, scan_id, payload}`. Types:
 `snapshot`, `system_state`, `scan_progress`, `feature_detected`, `scan_acquisition_ended`,

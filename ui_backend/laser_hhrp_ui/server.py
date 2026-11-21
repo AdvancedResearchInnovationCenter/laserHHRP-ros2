@@ -46,9 +46,10 @@ class _SupervisorService:
 def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_dir=None,
           warn_after_s: float = 10.0, fail_after_s: float = 120.0, clock: Clock | None = None,
           ros: bool = False, data_root: str | Path | None = None, usb_roots=None, usb=None,
-          power_off_command: list[str] | None = None):
+          power_off_command: list[str] | None = None, service_pin_file=None, kiosk_control=None):
     """Wire repository, engine, hub, ingress, the event source (mock or ROS) and the app (also for tests).
-    `power_off_command`: what the screen's Turn off runs (live ROS only; none = the button is not offered)."""
+    `power_off_command`: what the screen's Turn off runs (live ROS only; none = the button is not offered).
+    `service_pin_file` + `kiosk_control`: the developer service menu (kiosk only; both needed)."""
     if mock and ros:
         raise ValueError("--mock and the ROS bridge are exclusive")
     clock = clock or Clock()
@@ -74,6 +75,18 @@ def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_di
         from .device import RosDevice
         engine.device = RosDevice(lambda: bridge.node, power_off_command)
         services = [bridge, _SupervisorService(supervisor)]   # stop order: supervisor, then bridge
+    if mock:
+        from .device import KioskControl, Service, ServiceAccess
+        root = Path(db).parent
+        pin = root / "service_pin"
+        if not pin.exists():
+            pin.write_text("2580\n")                          # the mock's service PIN
+        engine.service = Service(ServiceAccess(pin), KioskControl(root / "kiosk"),
+                                 network=lambda: [{"device": "wlan0", "type": "wifi", "state": "connected",
+                                                   "connection": "mock-wifi", "ipv4": ["192.0.2.10"]}])
+    elif service_pin_file and kiosk_control:
+        from .device import KioskControl, Service, ServiceAccess
+        engine.service = Service(ServiceAccess(service_pin_file), KioskControl(kiosk_control))
     from .export import DEFAULT_USB_ROOTS, UsbExporter
     usb = usb or UsbExporter(usb_roots or DEFAULT_USB_ROOTS)
     app = create_app(engine, hub, ingress, mock=mock_ros, static_dir=static_dir, services=services, usb=usb)
@@ -96,6 +109,8 @@ def main(argv=None) -> None:
                     help="allowed mount root for USB export (repeatable; default: /media and /run/media)")
     ap.add_argument("--power-off-command", default=None,
                     help="command run by the screen's Turn off, e.g. 'systemctl poweroff' (default: no Turn off)")
+    ap.add_argument("--service-pin-file", default=None, help="service menu PIN (4-8 digits in this file)")
+    ap.add_argument("--kiosk-control", default=None, help="kiosk session request folder (deploy/kiosk)")
     ap.add_argument("--log-level", default="info")
     args, _ = ap.parse_known_args(argv)   # tolerate --ros-args from ros2 run
     logging.basicConfig(level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -104,7 +119,8 @@ def main(argv=None) -> None:
     app, *_ = build(args.db, mock=args.mock, mock_speed=args.mock_speed, static_dir=static,
                     warn_after_s=args.analysis_warn_s, fail_after_s=args.analysis_fail_s, ros=ros,
                     data_root=args.data_root, usb_roots=args.usb_root,
-                    power_off_command=shlex.split(args.power_off_command) if args.power_off_command else None)
+                    power_off_command=shlex.split(args.power_off_command) if args.power_off_command else None,
+                    service_pin_file=args.service_pin_file, kiosk_control=args.kiosk_control)
     logging.getLogger("laser_hhrp_ui").info("database %s, static %s, source %s", args.db, static,
                                             "mock" if args.mock else "ros" if ros else "none")
     import uvicorn

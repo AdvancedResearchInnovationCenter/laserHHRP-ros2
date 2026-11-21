@@ -30,15 +30,17 @@ export function Keyboard({ value, onChange, onSubmit, maxLength, submitLabel, ca
   );
 }
 
-export function Keypad({ value, onChange, onSubmit, canSubmit, submitLabel = "OK" }: {
+/** Digits only. `maxLength` 3 and a lone 0 replaced by the next digit suit counts; a PIN passes 8 and `keepZero`. */
+export function Keypad({ value, onChange, onSubmit, canSubmit, submitLabel = "OK", maxLength = 3, keepZero = false }: {
   value: string; onChange: (v: string) => void; onSubmit: () => void; canSubmit: boolean; submitLabel?: string;
+  maxLength?: number; keepZero?: boolean;
 }) {
   usePhysicalKeys((key) => {
     if (key === "Backspace") onChange(value.slice(0, -1));
     else if (key === "Enter") { if (canSubmit) onSubmit(); }
-    else if (/^[0-9]$/.test(key) && value.length < 3) onChange(value + key);
+    else if (/^[0-9]$/.test(key) && value.length < maxLength) onChange(value + key);
   });
-  const add = (c: string) => value.length < 3 && onChange(value === "0" ? c : value + c);
+  const add = (c: string) => value.length < maxLength && onChange(value === "0" && !keepZero ? c : value + c);
   return (
     <div className="keypad">
       {"123456789".split("").map((c) => <button key={c} className="key" onClick={() => add(c)}>{c}</button>)}

@@ -1,41 +1,110 @@
 // Operator device actions (backend device.py): turning the device off and the gyro calibration, so the device
-// needs no terminal. The backend refuses both during a scan (power off also while an analysis is pending);
-// the screens only offer them where that cannot happen.
+// needs no terminal; and the developers' service menu (PIN): network, desktop mode, restart of the software.
+// The backend refuses all of them during a scan (and while an analysis is pending, except calibration); the
+// screens offer the ⋮ menu only where that cannot happen. Turn off is two taps deep on purpose.
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
-import type { Screen, Snapshot } from "../api/types";
+import type { NetworkDevice, Screen, Snapshot } from "../api/types";
 import { calibrationOutcome } from "../lib/format";
 import type { Run } from "../screens/common";
+import { Keypad } from "./Keyboard";
 import { Confirm, Modal } from "./Modal";
 
 /** Screens with nothing being scanned or analysed. */
 export const POWER_OFF_SCREENS: readonly Screen[] = ["identify", "setup", "ready", "not_ready"];
 
-export function offerPowerOff(snap: Snapshot, connected: boolean): boolean {
-  return connected && snap.device.can_power_off && !snap.device.powering_off && POWER_OFF_SCREENS.includes(snap.screen);
+export function offerMenu(snap: Snapshot, connected: boolean): boolean {
+  const d = snap.device;
+  return connected && !d.powering_off && !d.switching && POWER_OFF_SCREENS.includes(snap.screen)
+    && (d.can_power_off || d.can_service);
 }
 
-export function PowerButton({ run }: { run: Run }) {
-  const [confirm, setConfirm] = useState(false);
+type Step = "menu" | "off" | "pin" | "service" | "desktop" | "restart";
+const PIN_MIN = 4, PIN_MAX = 8;
+
+export function MenuButton({ snap, run }: { snap: Snapshot; run: Run }) {
+  const [step, setStep] = useState<Step | null>(null);
+  const [pin, setPin] = useState("");
+  const [network, setNetwork] = useState<NetworkDevice[]>([]);
+  const close = () => { setStep(null); setPin(""); };
+  const unlock = async () => {
+    const r = await run(api.serviceUnlock(pin));
+    if (r.ok) { setNetwork(r.data.network); setStep("service"); } else setPin("");
+  };
+  const act = async (kind: "desktop" | "restart") => {
+    const p = pin;
+    close();
+    await run(api.service(kind, p));
+  };
   return (
     <>
-      <button className="hdr-power" aria-label="Turn off" data-testid="power-off" onClick={() => setConfirm(true)}>⏻</button>
-      {confirm && (
+      <button className="hdr-menu" aria-label="Menu" data-testid="menu" onClick={() => setStep("menu")}>⋮</button>
+      {step === "menu" && (
+        <Modal title="Menu" onClose={close}>
+          <div className="menu-list">
+            {snap.device.can_power_off && <button className="secondary" onClick={() => setStep("off")}>Turn off…</button>}
+            {snap.device.can_service && <button className="secondary" onClick={() => setStep("pin")}>Service…</button>}
+          </div>
+        </Modal>
+      )}
+      {step === "off" && (
         <Confirm title="Turn off the device?" tone="danger" confirmLabel="Turn off"
                  text={<>The scanner shuts down. Inspections and results are kept.<br />
                    <strong>Wait until the screen is dark</strong> before you remove the power.</>}
-                 onCancel={() => setConfirm(false)}
-                 onConfirm={() => { setConfirm(false); void run(api.powerOff()); }} />
+                 onCancel={close} onConfirm={() => { close(); void run(api.powerOff()); }} />
+      )}
+      {step === "pin" && (
+        <Modal title="Service PIN" onClose={close}>
+          <div className="pad-value" data-testid="pin">{"•".repeat(pin.length) || <span className="muted">—</span>}</div>
+          <Keypad value={pin} onChange={setPin} maxLength={PIN_MAX} keepZero submitLabel="Open"
+                  canSubmit={pin.length >= PIN_MIN} onSubmit={() => void unlock()} />
+        </Modal>
+      )}
+      {step === "service" && (
+        <Modal title="Service" wide onClose={close}>
+          <ul className="net-list" data-testid="network">
+            {network.length === 0 && <li className="muted">No network</li>}
+            {network.map((n) => (
+              <li key={n.device}>
+                <strong>{n.type === "wifi" ? "Wi-Fi" : n.type === "ethernet" ? "Ethernet" : n.device}</strong>
+                {" "}{n.connection || n.state || "—"}{n.ipv4.length > 0 && <> · {n.ipv4.join(", ")}</>}
+                <span className="muted"> ({n.device})</span>
+              </li>
+            ))}
+          </ul>
+          <div className="modal-actions">
+            <button className="secondary" onClick={() => setStep("restart")}>Restart scanner software</button>
+            <button className="primary" onClick={() => setStep("desktop")}>Desktop mode</button>
+          </div>
+        </Modal>
+      )}
+      {step === "desktop" && (
+        <Confirm title="Desktop mode?" confirmLabel="Open the desktop"
+                 text={<>Stops the scanner software and opens the Ubuntu desktop (terminal, Wi-Fi settings).<br />
+                   Log out of the desktop to come back to this screen.</>}
+                 onCancel={close} onConfirm={() => void act("desktop")} />
+      )}
+      {step === "restart" && (
+        <Confirm title="Restart the scanner software?" confirmLabel="Restart"
+                 text={<>The core, the backend and the detector stop and start again (about 15 s).
+                   Inspections and results are kept.</>}
+                 onCancel={close} onConfirm={() => void act("restart")} />
       )}
     </>
   );
 }
 
-export function PoweringOff() {
+/** Turning off, opening the desktop or restarting: the backend stops shortly; this stays on screen. */
+export function Leaving({ snap }: { snap: Snapshot }) {
+  const [title, text] = snap.device.powering_off
+    ? ["Turning off…", "Wait until the screen is dark, then remove the power."]
+    : snap.device.switching === "desktop"
+      ? ["Opening the desktop…", "The scanner software stops. Log out of the desktop to come back here."]
+      : ["Restarting the scanner software…", "This screen comes back by itself in about 15 s."];
   return (
-    <div className="screen powering-off" role="alert" data-testid="powering-off">
-      <div className="status-big">Turning off…</div>
-      <p>Wait until the screen is dark, then remove the power.</p>
+    <div className="screen powering-off" role="alert" data-testid="leaving">
+      <div className="status-big">{title}</div>
+      <p>{text}</p>
     </div>
   );
 }

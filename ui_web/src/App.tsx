@@ -10,7 +10,7 @@ import { Results } from "./screens/Results";
 import { Scanning } from "./screens/Scanning";
 import { Setup } from "./screens/Setup";
 import type { Run } from "./screens/common";
-import { PoweringOff } from "./ui/Device";
+import { Leaving } from "./ui/Device";
 import { AlertStrip, Header } from "./ui/Header";
 import { useBackend } from "./state/useBackend";
 
@@ -63,11 +63,11 @@ export function Shell({ snap, connected, run, toast }: {
   }, [snap.screen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openHistory = () => snap.inspection && setOverlay({ kind: "history", uuid: snap.inspection.uuid, back: null });
-  // Turning off: the backend stops shortly; this stays on screen (not the offline notice) until it is dark.
-  const poweringOff = snap.device.powering_off;
+  // Turning off / desktop mode / restart: the backend stops shortly; this stays on screen, not the offline notice.
+  const poweringOff = snap.device.powering_off || !!snap.device.switching;
   let body;
   if (poweringOff) {
-    body = <PoweringOff />;
+    body = <Leaving snap={snap} />;
   } else if (overlay?.kind === "history") {
     body = <History snap={snap} uuid={overlay.uuid} run={run} onBack={() => setOverlay(overlay.back)} />;
   } else if (overlay?.kind === "past") {

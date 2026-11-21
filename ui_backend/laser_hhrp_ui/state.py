@@ -70,6 +70,8 @@ class Engine:
         self.detector_control = detector_control or NullDetectorControl()
         self.device = NoDevice()                  # calibration / power off (device.py), set by the server
         self.powering_off = False                 # the operator turned the device off: nothing else is accepted
+        self.service = None                       # developer service menu (device.Service), set by the server
+        self.switching: str | None = None         # "desktop" / "restart" requested from the service menu
         self.warn_after_s, self.fail_after_s = warn_after_s, fail_after_s
         self.hardware_stale_s = hardware_stale_s
         self.orphan_limit, self.orphan_ttl_s = orphan_limit, orphan_ttl_s
@@ -301,12 +303,14 @@ class Engine:
 
     def device_view(self) -> dict:
         return {"can_calibrate": bool(self.device.can_calibrate), "can_power_off": bool(self.device.can_power_off),
-                "powering_off": self.powering_off}
+                "powering_off": self.powering_off,
+                "can_service": bool(self.service is not None and self.service.available), "switching": self.switching}
 
     # ------------------------------------------------------------------ emit helpers
     def _emit_system(self, force: bool = True) -> None:
         ready, reasons, warnings = self.readiness()
-        key = (ready, tuple(reasons), tuple(warnings), self.screen().value, len(self.alerts), self.powering_off)
+        key = (ready, tuple(reasons), tuple(warnings), self.screen().value, len(self.alerts), self.powering_off,
+               self.switching)
         if not force and key == self._last_ready_key:
             return
         self._last_ready_key = key
@@ -1022,6 +1026,26 @@ class Engine:
     def power_off_failed(self, message: str) -> None:
         self.powering_off = False
         self._alert("power_off_failed", message)
+
+    def begin_switch(self, kind: str) -> bool:
+        """Service menu: desktop mode or restart of the scanner software (the PIN is checked by the caller).
+        True: send the request now; False: already switching (a repeated tap)."""
+        if self.powering_off:
+            raise CommandError(409, "powering_off", "The device is turning off")
+        if self.switching:
+            return False
+        if self._acquiring():
+            raise CommandError(409, "scanning", "A scan is running: release the switch and wait for the analysis")
+        if self.repo.scans_where("analysis = 'pending'"):
+            raise CommandError(409, "analyzing", "Wait until the analysis has finished")
+        self.switching = kind
+        self._audit("service_" + kind, actor=self._actor())
+        self._emit_system()
+        return True
+
+    def switch_failed(self, message: str) -> None:
+        self.switching = None
+        self._alert("service_failed", message)
 
     def decide(self, scan_id: str, raw) -> dict:
         choice = {"accept": Decision.ACCEPTED, "rescan": Decision.RESCANNED}.get(raw)

@@ -102,7 +102,8 @@ def test_power_off_once_and_failure_is_reported():
 def test_power_off_not_offered_without_a_command():
     h = Harness()
     h.engine.device = RosDevice(lambda: None, power_off_command=None)
-    assert h.engine.snapshot()["device"] == {"can_calibrate": True, "can_power_off": False, "powering_off": False}
+    assert h.engine.snapshot()["device"] == {"can_calibrate": True, "can_power_off": False, "powering_off": False,
+                                             "can_service": False, "switching": None}
     refused(h.engine.begin_power_off, "unavailable")
     h.engine.device = NoDevice()
     assert h.engine.snapshot()["device"]["can_calibrate"] is False
@@ -184,7 +185,8 @@ def test_power_off_over_http(app_parts):
 def test_live_backend_without_ros_offers_neither_action(tmp_path):
     app, engine, *_ = build(tmp_path / "ui.db", mock=False, clock=Clock("synced"))
     with TestClient(app) as client:
-        assert state(client)["device"] == {"can_calibrate": False, "can_power_off": False, "powering_off": False}
+        assert state(client)["device"] == {"can_calibrate": False, "can_power_off": False, "powering_off": False,
+                                           "can_service": False, "switching": None}
         for path in ("/device/calibrate", "/device/power-off"):
             r = client.post(P + path)
             assert r.status_code == 409 and r.json()["error"]["code"] == "unavailable"
@@ -198,3 +200,102 @@ def test_power_off_failure_over_http(tmp_path):
         assert r.status_code == 500 and r.json()["error"]["code"] == "power_off_failed"
         s = state(client)
         assert s["device"]["powering_off"] is False and s["alerts"][-1]["code"] == "power_off_failed"
+
+
+# ---- service menu (developers, PIN) ----
+from laser_hhrp_ui.device import KioskControl, Service, ServiceAccess, ServiceError  # noqa: E402
+
+
+def test_service_pin_rules(tmp_path):
+    pin = tmp_path / "pin"
+    now = [100.0]
+    acc = ServiceAccess(pin, max_tries=3, lock_s=60.0, monotonic=lambda: now[0])
+    assert not acc.available                                          # no file: no service menu
+    pin.write_text("12a4\n")
+    assert not acc.available                                          # not digits
+    pin.write_text("2580\n")
+    assert acc.available
+    acc.check("2580")
+    for bad in ("0000", "", None, 2580, "25800"):
+        with pytest.raises(ServiceError) as e:
+            acc.check(bad)
+        assert e.value.code in ("wrong_pin", "locked")
+    with pytest.raises(ServiceError) as e:                            # locked after 3 wrong in a row ...
+        acc.check("2580")
+    assert e.value.code == "locked" and e.value.status == 429
+    now[0] += 61
+    acc.check("2580")                                                 # ... for 60 s
+    pin.write_text("4711\n")                                         # changed over SSH: used at once
+    with pytest.raises(ServiceError):
+        acc.check("2580")
+    acc.check("4711")
+
+
+def test_kiosk_request_file(tmp_path):
+    c = KioskControl(tmp_path / "kiosk")
+    assert c.request("desktop") == (True, "desktop")
+    assert (tmp_path / "kiosk" / "request").read_text() == "desktop\n"
+    assert c.request("rm -rf")[0] is False
+    (tmp_path / "ro").mkdir()
+    (tmp_path / "ro").chmod(0o500)
+    try:
+        assert KioskControl(tmp_path / "ro" / "x").request("restart")[0] is False
+    finally:
+        (tmp_path / "ro").chmod(0o700)
+
+
+def test_switch_refused_during_a_scan_or_a_pending_analysis_and_once_only():
+    h = harness()
+    h.ready_inspection()
+    sid = h.press()
+    refused(lambda: h.engine.begin_switch("desktop"), "scanning")
+    h.results(sid, 2)
+    h.release(sid)
+    refused(lambda: h.engine.begin_switch("restart"), "analyzing")
+    h.close(sid)
+    h.finalize(sid, emitted=2, targets=2)
+    assert h.engine.begin_switch("desktop") is True
+    assert h.engine.begin_switch("desktop") is False
+    assert h.engine.snapshot()["device"]["switching"] == "desktop"
+    assert len(h.repo.audit_events("service_desktop")) == 1
+    h.engine.switch_failed("Could not ask the kiosk session")
+    s = h.engine.snapshot()
+    assert s["device"]["switching"] is None and s["alerts"][-1]["code"] == "service_failed"
+
+
+def test_service_over_http(app_parts, tmp_path):
+    client, engine, mock = app_parts
+    ready(client)
+    assert state(client)["device"]["can_service"] is True
+    r = client.post(P + "/device/service/unlock", json={"pin": "0000"})
+    assert r.status_code == 403 and r.json()["error"]["code"] == "wrong_pin"
+    r = client.post(P + "/device/service/desktop", json={"pin": "0000"})
+    assert r.status_code == 403 and not (tmp_path / "kiosk" / "request").exists()   # nothing without the PIN
+    r = client.post(P + "/device/service/unlock", json={"pin": "2580"})
+    assert r.status_code == 200 and r.json()["network"][0]["connection"] == "mock-wifi"
+    assert client.post(P + "/device/service/reboot-into-anything", json={"pin": "2580"}).status_code == 404
+    r = client.post(P + "/device/service/restart", json={"pin": "2580"})
+    assert r.status_code == 200 and r.json() == {"switching": "restart"}
+    assert (tmp_path / "kiosk" / "request").read_text() == "restart\n"
+    assert state(client)["device"]["switching"] == "restart"
+    assert len(engine.repo.audit_events("service_pin_refused")) == 2
+
+
+def test_service_refused_while_scanning_over_http(app_parts, tmp_path):
+    client, engine, mock = app_parts
+    ready(client)
+    client.post(P + "/dev/mock/press")
+    wait_for(lambda: state(client)["screen"] == "scanning")
+    r = client.post(P + "/device/service/desktop", json={"pin": "2580"})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "scanning"
+    assert not (tmp_path / "kiosk" / "request").exists()
+    client.post(P + "/dev/mock/release")
+    wait_for(lambda: state(client)["screen"] in ("results", "analysis_failed"), timeout=20)
+
+
+def test_no_service_menu_without_kiosk_setup(tmp_path):
+    app, engine, *_ = build(tmp_path / "ui.db", mock=False, clock=Clock("synced"), service_pin_file=tmp_path / "pin")
+    with TestClient(app) as client:
+        assert state(client)["device"]["can_service"] is False
+        r = client.post(P + "/device/service/unlock", json={"pin": "2580"})
+        assert r.status_code == 409 and r.json()["error"]["code"] == "unavailable"

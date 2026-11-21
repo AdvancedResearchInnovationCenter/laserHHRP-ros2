@@ -192,6 +192,50 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
             log.warning("power off requested by the operator")
         return {"powering_off": True}
 
+    # ---- service menu (developers, PIN): network view, desktop mode, restart of the scanner software ----
+    async def _service(request: Request):
+        """The PIN from the body, checked; returns the service or an error response."""
+        from .device import ServiceError
+        svc = engine.service
+        if svc is None or not svc.available:
+            return None, _error(409, "unavailable", "The service menu is not set up on this device")
+        try:
+            body = await _body(request)
+            svc.access.check(body.get("pin"))
+        except models.ValidationError as e:
+            return None, _error(400, "invalid", e.message, e.field)
+        except ServiceError as e:
+            engine._audit("service_pin_refused", code=e.code)
+            return None, _error(e.status, e.code, e.message, "pin")
+        return svc, None
+
+    @app.post(P + "/device/service/unlock")
+    async def service_unlock(request: Request):
+        svc, err = await _service(request)
+        if err:
+            return err
+        network = await asyncio.get_running_loop().run_in_executor(None, svc.network)
+        return {"network": network}
+
+    @app.post(P + "/device/service/{kind}")
+    async def service_action(kind: str, request: Request):
+        if kind not in ("desktop", "restart"):
+            return _error(404, "not_found", f"unknown service action {kind}")
+        svc, err = await _service(request)
+        if err:
+            return err
+        try:
+            first = engine.begin_switch(kind)
+        except CommandError as e:
+            return _error(e.status, e.code, e.message, e.field)
+        if first:
+            ok, message = await asyncio.get_running_loop().run_in_executor(None, svc.control.request, kind)
+            if not ok:
+                engine.switch_failed(message)
+                return _error(500, "service_failed", message)
+            log.warning("service: %s requested", kind)
+        return {"switching": kind}
+
     # ---- export (plan sections 7, 8) ----
     @app.get(P + "/inspections/{uuid}/export.csv")
     async def export_csv(uuid: str):
@@ -288,6 +332,7 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         async def mock_power_on():
             """The mock turns nothing off: end its 'turning off' so a check can go on."""
             engine.powering_off = False
+            engine.switching = None
             engine._emit_system()
             return engine.device_view()
 

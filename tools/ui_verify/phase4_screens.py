@@ -515,21 +515,57 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         check("Try again" in b.text(), "failed calibration: said so (old values kept), Try again offered")
         b.tap("OK")
 
-        # ---- 12c Turn off: confirm, then its own screen (the mock turns nothing off) ----
-        b.tap("⏻")
+        # ---- 12c Turn off: behind the ⋮ menu, confirm, then its own screen (the mock turns nothing off) ----
+        check("⏻" not in b.text(), "no one-tap Turn off in the header")
+        b.tap("⋮")
+        b.wait_text("Service…")
+        layout_ok(b, "menu")
+        b.shot(out, "19f-menu")
+        b.tap("Turn off…")
         b.wait_text("Turn off the device?")
         layout_ok(b, "turn off (confirm)")
-        b.shot(out, "19f-turn-off")
         b.tap("Cancel")
         check(not api.state()["device"]["powering_off"], "Cancel: nothing turned off")
-        b.tap("⏻")
+        b.tap("⋮")
+        b.tap("Turn off…")
         b.tap("Turn off")
         b.wait_text("Wait until the screen is dark")
         layout_ok(b, "turning off")
         b.shot(out, "19g-turning-off")
-        check(api.state()["device"]["powering_off"] and "⏻" not in b.text(), "turning off: own screen, no second Turn off")
+        check(api.state()["device"]["powering_off"] and "⋮" not in b.text(), "turning off: own screen, no menu")
         api.call("POST", "/dev/mock/power-on")
         b.wait_text("Hold the switch to scan")
+
+        # ---- 12d Service menu (PIN 2580 with the mock): network, restart of the scanner software ----
+        b.tap("⋮")
+        b.tap("Service…")
+        b.wait_text("Service PIN")
+        for c in "1111":
+            b.tap(c)
+        layout_ok(b, "service PIN")
+        b.shot(out, "19h-service-pin")
+        b.tap("Open")
+        b.wait_text("Wrong PIN")
+        check("Service PIN" in b.text(), "wrong PIN: refused, still asking")
+        for c in "2580":
+            b.tap(c)
+        b.tap("Open")
+        b.wait_text("mock-wifi")
+        layout_ok(b, "service menu")
+        b.shot(out, "19i-service")
+        check("192.0.2.10" in b.text(), "service menu: Wi-Fi name and IP address shown")
+        b.tap("Restart scanner software")
+        b.wait_text("Restart the scanner software?")
+        b.tap("Restart")
+        b.wait_text("Restarting the scanner software")
+        layout_ok(b, "restarting")
+        b.shot(out, "19j-restarting")
+        check(api.state()["device"]["switching"] == "restart", "restart requested from the service menu")
+        api.call("POST", "/dev/mock/power-on")
+        b.wait_text("Hold the switch to scan")
+        end = time.monotonic() + 10                       # the 'Wrong PIN' message covers the bottom bar for 5 s
+        while time.monotonic() < end and b.js("!!document.querySelector('.toast')"):
+            time.sleep(0.2)
 
         # ---- 13 End inspection, past inspections, a rivet inspection runs only rivet_detector ----
         b.tap("End inspection")

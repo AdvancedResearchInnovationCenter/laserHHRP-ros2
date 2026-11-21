@@ -69,7 +69,10 @@ export interface Snapshot {
   detector: { mode: Mode | null; alive: boolean; ready: boolean; error: string };
   source: "none" | "mock" | "ros"; clock_quality: string;
   // operator device actions (backend device.py): which are offered, and whether the device is turning off
-  device: { can_calibrate: boolean; can_power_off: boolean; powering_off: boolean };
+  device: {
+    can_calibrate: boolean; can_power_off: boolean; powering_off: boolean;
+    can_service: boolean; switching: "desktop" | "restart" | null;    // developer service menu (PIN)
+  };
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
   preview: Preview | null;            // Phase 2 live view: shown, never recorded
   preview_notice: string | null;
@@ -98,3 +101,5 @@ export interface Envelope<T = unknown> {
 }
 
 export interface ApiError { code: string; message: string; field: string | null }
+
+export interface NetworkDevice { device: string; type: string; state: string; connection: string; ipv4: string[] }

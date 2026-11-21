@@ -199,27 +199,40 @@ export const tests: Test[] = [
     assert.excludes(html(snapshot({ source: "ros" })), "DEV");
     assert.includes(html(snapshot({ source: "mock" })), "DEV");
   }],
-  ["turn off: offered only where nothing is scanned or analysed, and only when enabled", () => {
-    const has = (m: string) => /<button[^>]*aria-label="Turn off"/.test(m);
-    for (const screen of ["identify", "setup", "ready", "not_ready"] as const)
-      assert.ok(has(html(snapshot({ screen }))), `Turn off on ${screen}`);
+  ["menu: the ⋮ menu only where nothing is scanned or analysed; Turn off never directly in the header", () => {
+    const has = (m: string) => /<button[^>]*aria-label="Menu"/.test(m);
+    for (const screen of ["identify", "setup", "ready", "not_ready"] as const) {
+      const m = html(snapshot({ screen }));
+      assert.ok(has(m), `menu on ${screen}`);
+      assert.ok(!/aria-label="Turn off"/.test(m) && !buttons(m).some((b) => /turn off|⏻/i.test(b)),
+                `no one-tap Turn off on ${screen}`);
+    }
     for (const screen of ["scanning", "finishing_analysis", "results", "analysis_failed"] as const)
-      assert.ok(!has(html(snapshot({ screen, current_scan: scan() }))), `no Turn off on ${screen}`);
-    assert.ok(!has(html(snapshot({ device: { can_calibrate: true, can_power_off: false, powering_off: false } }))),
-              "not offered when the backend has no power-off command");
+      assert.ok(!has(html(snapshot({ screen, current_scan: scan() }))), `no menu on ${screen}`);
+    const none = { can_calibrate: true, can_power_off: false, powering_off: false, can_service: false, switching: null };
+    assert.ok(!has(html(snapshot({ device: none }))), "no menu without power off or service");
+    assert.ok(has(html(snapshot({ device: { ...none, can_service: true } }))), "menu for the service menu alone");
     assert.ok(!has(html(snapshot(), false)), "not offered while disconnected");
   }],
-  ["turning off: its own screen, kept when the backend goes away", () => {
-    const off = snapshot({ device: { can_calibrate: true, can_power_off: true, powering_off: true } });
-    for (const connected of [true, false]) {
-      const m = text(html(off, connected));
-      assert.includes(m, "Turning off");
-      assert.includes(m, "TURNING OFF");
-      assert.excludes(m, "OFFLINE");
-      assert.includes(m, "Wait until the screen is dark");
-      assert.excludes(m, "Connection to the backend lost");
-      assert.excludes(m, "Hold the switch to scan");
+  ["leaving: turning off, desktop mode and restart each have their own screen, kept when the backend goes", () => {
+    const base = snapshot().device;
+    const cases = [
+      [{ ...base, powering_off: true }, "Turning off", "TURNING OFF"],
+      [{ ...base, switching: "desktop" as const }, "Opening the desktop", "SERVICE"],
+      [{ ...base, switching: "restart" as const }, "Restarting the scanner software", "SERVICE"],
+    ] as const;
+    for (const [device, title, pill] of cases) {
+      for (const connected of [true, false]) {
+        const m = text(html(snapshot({ device }), connected));
+        assert.includes(m, title);
+        assert.includes(m, pill);
+        assert.excludes(m, "Connection to the backend lost");
+        assert.excludes(m, "OFFLINE");
+        assert.excludes(m, "Hold the switch to scan");
+      }
+      assert.ok(!/aria-label="Menu"/.test(html(snapshot({ device }))), `no menu while ${title}`);
     }
+    assert.includes(text(html(snapshot({ device: { ...base, powering_off: true } }))), "Wait until the screen is dark");
   }],
   ["calibration: Calibrate when required; Calibrate gyro in the bar; none without the action", () => {
     const need = snapshot({ screen: "not_ready", ready: false, not_ready_reasons: ["Calibration required"] });
@@ -231,7 +244,7 @@ export const tests: Test[] = [
     assert.includes(text(m), "Calibrating: keep the device still");
     assert.ok(/<button[^>]*disabled[^>]*>Calibrate gyro<\/button>/.test(m), "no second calibration while one runs");
     assert.ok(!buttons(m).includes("Calibrate"), "no Calibrate while it runs");
-    const none = { ...need, device: { can_calibrate: false, can_power_off: false, powering_off: false } };
+    const none = { ...need, device: { ...need.device, can_calibrate: false, can_power_off: false } };
     assert.ok(!buttons(html(none)).some((b) => b.startsWith("Calibrate")), "no calibration without the action");
   }],
 ];

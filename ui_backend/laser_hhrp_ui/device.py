@@ -81,3 +81,117 @@ class RosDevice:
 
     def power_off(self) -> tuple[bool, str]:
         return run_power_off(self.power_off_command)
+
+
+# ---- service menu (developers): PIN, network information, kiosk requests ----
+class ServiceError(Exception):
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(message)
+        self.status, self.code, self.message = status, code, message
+
+
+class ServiceAccess:
+    """The service menu's PIN: 4-8 digits in a file (read at every check, so it can be changed over SSH).
+    After `max_tries` wrong PINs in a row nothing is accepted for `lock_s`."""
+
+    def __init__(self, pin_file, max_tries: int = 5, lock_s: float = 60.0, monotonic=None):
+        import time as _time
+        self.pin_file = pin_file
+        self.max_tries, self.lock_s = max_tries, lock_s
+        self.monotonic = monotonic or _time.monotonic
+        self.wrong, self.locked_until = 0, 0.0
+        self._lock = threading.Lock()
+
+    def _pin(self) -> str | None:
+        try:
+            with open(self.pin_file, encoding="utf-8") as f:
+                pin = f.read().strip()
+        except OSError:
+            return None
+        return pin if pin.isdigit() and 4 <= len(pin) <= 8 else None
+
+    @property
+    def available(self) -> bool:
+        return self._pin() is not None
+
+    def check(self, pin) -> None:
+        import hmac
+        with self._lock:
+            now = self.monotonic()
+            if now < self.locked_until:
+                raise ServiceError(429, "locked", f"Too many wrong PINs: wait {self.locked_until - now:.0f} s")
+            expected = self._pin()
+            if expected is None:
+                raise ServiceError(409, "unavailable", "The service menu is not set up on this device")
+            if not isinstance(pin, str) or not hmac.compare_digest(pin.encode(), expected.encode()):
+                self.wrong += 1
+                if self.wrong >= self.max_tries:
+                    self.wrong, self.locked_until = 0, now + self.lock_s
+                raise ServiceError(403, "wrong_pin", "Wrong PIN")
+            self.wrong = 0
+
+
+class KioskControl:
+    """Requests to the kiosk session (deploy/kiosk/kiosk-session.sh), which watches `<dir>/request`:
+    `desktop` stops the scanner software and opens the Ubuntu desktop until logout; `restart` restarts the
+    core and the backend."""
+    KINDS = ("desktop", "restart")
+
+    def __init__(self, directory):
+        from pathlib import Path
+        self.dir = Path(directory)
+
+    def request(self, kind: str) -> tuple[bool, str]:
+        import os
+        if kind not in self.KINDS:
+            return False, f"unknown request {kind}"
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            tmp = self.dir / "request.tmp"
+            tmp.write_text(kind + "\n")
+            os.replace(tmp, self.dir / "request")
+        except OSError as e:
+            return False, f"Could not ask the kiosk session: {e.strerror or e}"
+        return True, kind
+
+
+def network_info() -> list[dict]:
+    """Network devices with state, connection (Wi-Fi name) and IPv4 addresses, for the service menu."""
+    devices = []
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            parts = line.replace("\\:", "\0").split(":")
+            if len(parts) != 4:
+                continue
+            dev, kind, state, conn = (p.replace("\0", ":") for p in parts)
+            if kind in ("wifi", "ethernet"):
+                devices.append({"device": dev, "type": kind, "state": state, "connection": conn, "ipv4": []})
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            f = line.split()
+            if len(f) >= 4 and f[2] == "inet":
+                d = next((x for x in devices if x["device"] == f[1]), None)
+                if d is None and f[1] != "lo":
+                    d = {"device": f[1], "type": "", "state": "", "connection": "", "ipv4": []}
+                    devices.append(d)
+                if d is not None:
+                    d["ipv4"].append(f[3].split("/")[0])
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return devices
+
+
+class Service:
+    """What the service menu needs: the PIN, the kiosk session and the network view."""
+
+    def __init__(self, access: ServiceAccess, control: KioskControl, network=network_info):
+        self.access, self.control, self.network = access, control, network
+
+    @property
+    def available(self) -> bool:
+        return self.access.available

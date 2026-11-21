@@ -127,7 +127,8 @@ allowlisted detector process per inspection, output in
 
 **Device actions.** `device.py`: gyro calibration (`calibration/start`) and power off (`--power-off-command`) from
 the screens, so the device needs no terminal (approved deviation from plan §3). The Engine refuses both during a
-scan, power off also while an analysis is pending. Scan start / stop stays on the physical switch.
+scan, power off also while an analysis is pending. Scan start / stop stays on the physical switch. Turn off is in
+the header's ⋮ menu; developers get ⋮ → Service… (PIN file, desktop mode, restart, network) in the kiosk.
 
 **Completion rules (each guarded by a test and a mutation).** A scan is complete only with a confirmed stop,
 stream close and detector finalization with equal frame counts, every declared `result_seq` committed,
