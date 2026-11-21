@@ -7,6 +7,7 @@ set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run with sudo" >&2; exit 1; }
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 USER_NAME="${SUDO_USER:-pi}"
+export USER_NAME
 UID_NUM="$(id -u "$USER_NAME")"
 SESSION=/usr/share/wayland-sessions/hhrp-kiosk.desktop
 ACCOUNT="/org/freedesktop/Accounts/User$UID_NUM"
@@ -19,6 +20,7 @@ set_session() {  # name type
 
 if [ "${1:-}" = "--undo" ]; then
   set_session ubuntu ""
+  sed -i '/^\s*TimedLogin\(Enable\)\?\s*=/d; /^\s*TimedLoginDelay\s*=/d' /etc/gdm3/custom.conf
   rm -f "$SESSION"
   AUTO="$(getent passwd "$USER_NAME" | cut -d: -f6)/.config/autostart/hhrp-operator-ui.desktop"
   [ -f "$AUTO" ] && sed -i 's/^X-GNOME-Autostart-enabled=.*/X-GNOME-Autostart-enabled=true/' "$AUTO"
@@ -52,5 +54,17 @@ Exec=$HERE/kiosk-session.sh
 Type=Application
 DesktopNames=HHRP
 DESKTOP
+# Timed login: whenever the login screen shows (desktop mode logged out, a crashed session), it continues into
+# the kiosk after 3 s, so an operator never meets a password prompt.
+python3 - <<'PY'
+import re
+p = "/etc/gdm3/custom.conf"
+s = open(p).read()
+if not re.search(r"^\s*TimedLoginEnable", s, re.M):
+    s = re.sub(r"^(\s*AutomaticLogin\s*=[^\n]*\n)",
+               r"\1TimedLoginEnable = true\nTimedLogin = %s\nTimedLoginDelay = 3\n" % __import__("os").environ["USER_NAME"],
+               s, count=1, flags=re.M)
+    open(p, "w").write(s)
+PY
 set_session hhrp-kiosk wayland
 echo "Done. Reboot: the Pi starts straight into the operator screen. Undo: sudo $0 --undo"

@@ -21,7 +21,7 @@ The service menu shows the network (Wi-Fi name, IP addresses) and offers:
 
 | Action | What happens |
 | --- | --- |
-| **Desktop mode** | the scanner software (core, backend, detector) and the screen stop; the Ubuntu desktop opens: terminal, Settings → Wi-Fi, `start_hardware.sh` by hand (the lock is free). **Log out** and the operator screen comes back with everything started; a reboot also always comes back to it. |
+| **Desktop mode** | the scanner software (core, backend, detector) and the screen stop; the Ubuntu desktop opens: terminal, Settings → Wi-Fi, `start_hardware.sh` by hand (the lock is free). **Log out**: the login screen shows for 3 s (GDM timed login), then the operator screen with everything started; a reboot also always comes back to it. |
 | **Restart scanner software** | core and backend (with the detector) stop and start again; the screen stays and reconnects |
 
 Both are refused during a scan or a pending analysis. Wi-Fi without the desktop: over SSH or on the text

@@ -94,13 +94,14 @@ watch_requests() {  # restart is done here; desktop ends the screen, the main lo
         rm -f "$CTL/request"
         echo "$(date -Is) request: restart"
         stop_stack; start_stack ;;
-      desktop)
-        kill -TERM "$(cat "$CTL/cage.pid" 2>/dev/null)" 2>/dev/null ;;
+      desktop)       # close Chromium: kiosk-browser.sh then ends, and cage exits by itself
+        pkill -TERM -f -- "--user-data-dir=$HOME/snap/chromium/common/hhrp-kiosk" 2>/dev/null ;;
     esac
   done
 }
 
-desktop() {  # the Ubuntu desktop as in ubuntu-wayland.desktop, until the developer logs out
+desktop() {  # the Ubuntu desktop as in ubuntu-wayland.desktop, until the developer logs out. GNOME's Log Out
+             # ends the whole login session: GDM's timed login (install.sh) then starts the kiosk again.
   echo "$(date -Is) desktop mode"
   env XDG_CURRENT_DESKTOP=ubuntu:GNOME XDG_SESSION_DESKTOP=ubuntu DESKTOP_SESSION=ubuntu \
     GNOME_SHELL_SESSION_MODE=ubuntu /usr/bin/gnome-session --session=ubuntu 9>&- </dev/null
@@ -108,7 +109,9 @@ desktop() {  # the Ubuntu desktop as in ubuntu-wayland.desktop, until the develo
 }
 
 # The session ends (logout, power off): stop the scanner software cleanly; the screen and the watcher go with it.
-trap 'echo "$(date -Is) session ending"; stop_stack; kill $(jobs -p) 2>/dev/null; exit 0' TERM INT HUP
+trap 'echo "$(date -Is) session ending"; echo desktop > "$CTL/request"
+      pkill -TERM -f -- "--user-data-dir=$HOME/snap/chromium/common/hhrp-kiosk"; stop_stack
+      kill $(jobs -p) 2>/dev/null; exit 0' TERM INT HUP     # the next session start clears the request
 
 start_stack
 watch_requests &            # keeps descriptor 9: a restart takes the lock again
