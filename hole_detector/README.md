@@ -51,7 +51,9 @@ ros2 run hole_detector hole_detector --ros-args --params-file <params.yaml> -p i
 | `/inspection/result` | `laser_hhrp/InspectionResult` per hole. `feature_type` is `countersink` or `hole`; `detail` is JSON: `id, d_top_mm, rms_mm, ring_coverage, countersunk, partial, scanned_share`. `-1` means not measured (countersink depth, flushness) |
 
 **Tagged mode (operator UI, `tagged: true`; off by default).** Started by the UI's detector supervisor. Input
-`/scan/frame_tagged` + `/scan/stream_closed` instead of `/scan/frame`; each scan UUID gets its own tracker and
+`/scan/frame_tagged` (transient local: frames published before the subscription was matched arrive from the
+synchronizer's history; frames exposed before the node started are ignored) + `/scan/stream_closed` instead of
+`/scan/frame`; each scan UUID gets its own tracker and
 `out_dir/<scan UUID>/` (made at once, also for a scan with nothing found). When the stream close has arrived
 and frames 0..n-1 are all in, the last frames get their detection pass, the files are flushed and exactly one
 `/inspection/detection_finalized` is published, without waiting for a next scan. Results also go to

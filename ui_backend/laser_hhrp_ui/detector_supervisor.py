@@ -5,7 +5,10 @@
 - Each package's own config/params.yaml, as detectors.launch.py uses, plus out_dir under the UI data root.
 - Tagged mode (tagged:=true): per-scan identity, a final pass on scan close, DetectionFinalized.
 - Ready = process alive AND its ROS node is the only one of that name AND it subscribes to /scan/frame_tagged
-  AND publishes /inspection/result_tagged. A PID alone is never "ready".
+  AND publishes /inspection/result_tagged, continuously for `settle_s`. A PID alone is never "ready". This
+  backend seeing the subscription does not mean the synchronizer already delivers to it (Pi, Fast DDS: up to
+  ~2 s later, 2026-11-21); the synchronizer's transient-local frame history covers that gap, the settle time
+  is a margin on top.
 - A detector node we did not start (e.g. the core launched with holes:=true) or the other mode's
   detector makes the state NOT READY with the reason; the supervisor never starts a duplicate.
 - Crash -> alive False with the exit code; restart only on explicit request.
@@ -79,13 +82,14 @@ class RosGraph:
 class DetectorSupervisor:
     def __init__(self, submit, graph, out_root: str | Path, log_dir: str | Path, resolve=resolve_detector,
                  start_timeout_s: float = 45.0, stop_timeout_s: float = 15.0, poll_s: float = 0.25,
-                 health_period_s: float = 2.0):
+                 health_period_s: float = 2.0, settle_s: float = 1.0):
         self.submit = submit
         self.graph = graph
         self.out_root, self.log_dir = Path(out_root), Path(log_dir)
         self.resolve = resolve
         self.start_timeout_s, self.stop_timeout_s = start_timeout_s, stop_timeout_s
         self.poll_s, self.health_period_s = poll_s, health_period_s
+        self.settle_s = settle_s
         self.pidfile = self.log_dir / "detector.pid"
         self.proc: subprocess.Popen | None = None
         self.mode: Mode | None = None
@@ -172,6 +176,7 @@ class DetectorSupervisor:
         name = DETECTOR[mode]
         other = DETECTOR[Mode.RIVET_FLUSHNESS if mode == Mode.CSK_DEPTH else Mode.CSK_DEPTH]
         t0, ready, last = time.monotonic(), False, None
+        ok_since: float | None = None            # graph condition true without a break since then
         while proc.poll() is None and generation == self.generation:
             try:
                 count = self.graph.node_count(name)
@@ -186,7 +191,10 @@ class DetectorSupervisor:
                     error = f"{name} not ready after {self.start_timeout_s:.0f} s (see {self.log_dir / (name + '.log')})"
             except Exception as e:  # graph query failed: not ready, keep watching
                 ok, error = False, f"ROS graph query failed: {e}"
-            state = (ok and not error, error)
+            now = time.monotonic()
+            ok_since = (ok_since if ok_since is not None else now) if ok else None
+            settled = ok and now - ok_since >= self.settle_s
+            state = (settled and not error, error)
             if state != last and generation == self.generation:
                 last = state
                 ready = state[0]

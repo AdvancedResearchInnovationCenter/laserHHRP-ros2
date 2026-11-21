@@ -134,6 +134,8 @@ MUTATIONS = [
     ("Detector's own value shown as the measurement [1, 8]", "models.py",
      '    return {"name": name, "value_mm": None, "unit": "mm", "status": "pending",',
      '    return {"name": name, "value_mm": raw_value_m, "unit": "mm", "status": "pending",'),
+    ("Detector ready as soon as the graph shows it (first frames lost on the Pi) [6]", "detector_supervisor.py",
+     "settled = ok and now - ok_since >= self.settle_s", "settled = ok"),
     # operator device actions (device.py, approved deviation from plan section 3)
     ("Gyro calibration allowed during a scan [device]", "state.py",
      'if self.hardware.scan_state != "IDLE" or self._acquiring():', "if False:"),

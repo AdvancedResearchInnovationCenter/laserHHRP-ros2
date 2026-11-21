@@ -5,7 +5,8 @@ Old bags carry the original ScanFrame only: no scan identity and no stream-close
 reads the bag (never modifies it), splits it into scans at every index 0, gives each scan a deterministic UUID
 (uuid5 of the bag path and scan number), publishes the frames as /scan/frame_tagged and, after each scan's last
 frame, a /scan/stream_closed with the number of frames published. It does not invent a switch-release time:
-the close marks only "no more frames in the bag for this scan".
+the close marks only "no more frames in the bag for this scan". Each published copy is stamped with the replay
+time: tagged detectors ignore frames exposed before they started (earlier scans from the synchronizer's history).
 
     python3 legacy_bag_adapter.py <bag> [--rate 120] [--wait-final 60]
 
@@ -68,8 +69,8 @@ def main(argv=None) -> int:
             finals[m.scan_id] = m
     node.create_subscription(DetectionFinalized, "/inspection/detection_finalized", on_final, QoSProfile(
         depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-    pub = node.create_publisher(TaggedScanFrame, "/scan/frame_tagged",
-                                QoSProfile(depth=400, reliability=ReliabilityPolicy.RELIABLE))
+    pub = node.create_publisher(TaggedScanFrame, "/scan/frame_tagged", QoSProfile(     # as the synchronizer
+        depth=1200, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
     close = node.create_publisher(ScanStreamClosed, "/scan/stream_closed", QoSProfile(
         depth=50, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
     executor = SingleThreadedExecutor()
@@ -87,6 +88,7 @@ def main(argv=None) -> int:
     for n, frames in enumerate(scans, start=1):
         scan_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{args.bag.resolve()}#scan{n}"))
         for f in frames:
+            f.header.stamp = node.get_clock().now().to_msg()   # detectors ignore frames older than themselves
             pub.publish(TaggedScanFrame(scan_id=scan_id, frame=f))
             time.sleep(1.0 / args.rate)
         c = ScanStreamClosed(scan_id=scan_id, frame_count=len(frames), stop_state=0, error="")

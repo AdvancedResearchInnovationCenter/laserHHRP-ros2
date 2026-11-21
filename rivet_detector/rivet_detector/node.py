@@ -154,9 +154,15 @@ class RivetDetector(Node):
         self.lock = threading.Lock()
         reliable = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE)
         inputs = MutuallyExclusiveCallbackGroup()
-        # 400 deep: ~3 s of profiles while a detection runs; a lost frame fails the scan, it is never skipped.
+        # Transient local, like the synchronizer's 1200-frame history: frames of a scan that started before the
+        # synchronizer matched this subscription (Fast DDS on the Pi: up to ~2 s) still arrive. Frames exposed
+        # before this process started belong to earlier scans and are ignored (on_tagged_frame), so the
+        # history never reopens an old scan. A lost frame fails the scan, it is never skipped.
+        self.started_ns = self.get_clock().now().nanoseconds
+        self.history_frames = 0
         self.create_subscription(TaggedScanFrame, "/scan/frame_tagged", self.on_tagged_frame, QoSProfile(
-            depth=400, reliability=ReliabilityPolicy.RELIABLE), callback_group=inputs)
+            depth=1200, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            callback_group=inputs)
         # Volatile: closes of scans from before this process started are none of its business.
         self.create_subscription(ScanStreamClosed, "/scan/stream_closed", self.on_stream_closed, reliable,
                                  callback_group=inputs)
@@ -183,6 +189,10 @@ class RivetDetector(Node):
         return job
 
     def on_tagged_frame(self, msg):
+        stamp = msg.frame.header.stamp
+        if stamp.sec * 1_000_000_000 + stamp.nanosec < self.started_ns:
+            self.history_frames += 1               # an earlier scan's frame from the synchronizer's history
+            return
         with self.lock:
             if msg.scan_id in self.done_ids:
                 self.late_frames += 1              # its scan is already finalized: never re-opened

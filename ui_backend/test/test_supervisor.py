@@ -102,6 +102,7 @@ def make(tmp_path):
         params.write_text("x: {}\n")
         exes = {n: script(tmp_path, n, b) for n, b in bodies.items()}
         graph, got = FakeGraph(), Collector()
+        kw.setdefault("settle_s", 0.2)
         sup = DetectorSupervisor(got, graph, tmp_path / "out", tmp_path / "logs",
                                  resolve=lambda n: (exes[n], str(params)), poll_s=0.05, health_period_s=0.1, **kw)
         graph.sup = sup
@@ -229,3 +230,35 @@ def test_restart_after_crash_waits_for_the_dead_node_to_leave_the_graph(make):
     sup.request(Mode.CSK_DEPTH, "a")
     st = got.wait(lambda s: s.ready)
     assert st.mode == "csk_depth" and not any("outside the UI" in (x.error or "") for x in got.items)
+
+
+def test_ready_only_after_the_graph_stayed_ready_for_the_settle_time(make):
+    """The synchronizer may not deliver to a subscription this backend already sees (Pi, Fast DDS: ~0.6 s of
+    frames lost when the scan started at once)."""
+    sup, graph, got = make(settle_s=1.0)
+
+    def after(n, pred):                                      # a status published after the first n
+        end = time.monotonic() + 10
+        while time.monotonic() < end:
+            with got.lock:
+                hit = [st for st in got.items[n:] if pred(st)]
+            if hit:
+                return hit[0]
+            time.sleep(0.02)
+        raise AssertionError(f"no status matched; got {got.items}")
+
+    graph.ready = False
+    sup.request(Mode.CSK_DEPTH, "a")
+    time.sleep(0.3)
+    graph.ready = True
+    shown = time.monotonic()
+    after(0, lambda s: s.ready)
+    assert time.monotonic() - shown >= 0.95, "ready before the settle time"
+    n = len(got.items)
+    graph.ready = False                                      # gone from the graph: not ready, settle again
+    after(n, lambda s: s.alive and not s.ready)
+    n = len(got.items)
+    graph.ready = True
+    back = time.monotonic()
+    after(n, lambda s: s.ready)
+    assert time.monotonic() - back >= 0.95

@@ -139,7 +139,7 @@ Plain C++ without ROS: easy to read and unit-tested in `test/test_logic.cpp`.
 | `CalibrationStatus.msg` | `calibration/status` |
 | `ScanStatus.msg`, `StorageStatus.msg`, `InspectionResult.msg` | `scan/status`, `scan/storage`, `inspection/result` |
 | `ScanSessionState.msg` | `scan/session_state`: the scan UUID of each transition, with the exact `scan/status` stamp (operator UI metadata; `scan/status` alone drives acquisition) |
-| `TaggedScanFrame.msg`, `ScanStreamClosed.msg` | `scan/frame_tagged` (each frame with its scan UUID, next to the unchanged `scan/frame`), `scan/stream_closed` (frames published per scan) |
+| `TaggedScanFrame.msg`, `ScanStreamClosed.msg` | `scan/frame_tagged` (each frame with its scan UUID, next to the unchanged `scan/frame`; reliable, transient local, last 1200 frames, so a detector matched late still gets the start of the scan), `scan/stream_closed` (frames published per scan) |
 | `TaggedInspectionResult.msg`, `DetectionFinalized.msg` | `inspection/result_tagged`, `inspection/detection_finalized` (detectors in tagged mode) |
 | `ScanRecordingSession.msg` | `scan/recording_session`: the recorder opened / closed a raw session (operator UI links it to the scan) |
 

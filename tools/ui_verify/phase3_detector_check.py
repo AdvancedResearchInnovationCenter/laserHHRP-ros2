@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Phase 3: the real hole_detector node in tagged mode, fed the synthetic test plate as tagged frames.
 
-Scenarios (one detector process, back to back): normal scan; stream close arriving before the frames (with
-redelivered frames); zero-frame scan; scan with missing frames; a late frame after finalization.
+Scenarios (one detector process, back to back): an earlier scan published before the detector started (in the
+transient-local frame history: must be ignored); a scan published before the detector's subscription was matched
+(the Pi's first-scan race: must arrive complete from the history); normal scan; stream close arriving before the
+frames (with redelivered frames); zero-frame scan; scan with missing frames; a late frame after finalization.
 Checks: tagged mode reports exactly what the legacy (untagged) node reports for the same frames; results numbered
 0..n-1 per scan; targets = countersinks; exactly one DetectionFinalized per scan; UUID folder with summary.csv
 (also for zero results). Run by phase3_detector_check.sh; exit code = FAILs.
@@ -100,8 +102,8 @@ class Probe:
         n.create_subscription(TaggedInspectionResult, "/inspection/result_tagged", self.on_result,
                               QoSProfile(depth=200, reliability=ReliabilityPolicy.RELIABLE))
         n.create_subscription(DetectionFinalized, "/inspection/detection_finalized", self.on_final, LATCHED)
-        self.pub_frame = n.create_publisher(TaggedScanFrame, "/scan/frame_tagged",
-                                            QoSProfile(depth=400, reliability=ReliabilityPolicy.RELIABLE))
+        self.pub_frame = n.create_publisher(TaggedScanFrame, "/scan/frame_tagged", QoSProfile(    # as the synchronizer
+            depth=1200, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.pub_close = n.create_publisher(ScanStreamClosed, "/scan/stream_closed", LATCHED)
         threading.Thread(target=rclpy.spin, args=(n,), daemon=True).start()
 
@@ -134,6 +136,16 @@ class Probe:
                     return self.final[scan_id][0]
             time.sleep(0.05)
         return None
+
+    def sees_subscription(self, node_name, timeout=30):
+        """The backend's readiness view: this probe's graph shows the detector subscribed (which does not mean
+        that the frame publisher has matched it yet)."""
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if any(i.node_name == node_name for i in self.node.get_subscriptions_info_by_topic("/scan/frame_tagged")):
+                return True
+            time.sleep(0.01)
+        return False
 
     def connected(self, timeout=30):
         end = time.monotonic() + timeout
@@ -184,13 +196,29 @@ def main():
     profiles, plate = plate_profiles()
     exe = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/lib/{PKG}/{PKG}"
     params = Path(os.environ["HHRP_WS"]) / f"install/{PKG}/share/{PKG}/config/params.yaml"
-    det = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(params), "-p", f"out_dir:={OUT}/det",
-                            "-p", "tagged:=true", "-p", "final_wait_s:=3.0", *EXTRA_PARAMS],
-                           stdout=open(OUT / "detector.log", "w"), stderr=subprocess.STDOUT)
     p = Probe()
     legacy = legacy_positions(profiles)
     print(f"legacy node on the same frames: {legacy}", flush=True)
+    # ---- O: an earlier scan, published before the detector exists: only in the publisher's history ----
+    old = str(uuid.uuid4())
+    for i, prof in enumerate(profiles[:100]):
+        p.frame(old, i, prof, rate=2000)
+    det = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(params), "-p", f"out_dir:={OUT}/det",
+                            "-p", "tagged:=true", "-p", "final_wait_s:=3.0", *EXTRA_PARAMS],
+                           stdout=open(OUT / "detector.log", "w"), stderr=subprocess.STDOUT)
     try:
+        # ---- G: the first scan starts the moment the detector shows up in the graph (Pi first-scan race) ----
+        check("detector subscription visible in the graph", p.sees_subscription(PKG))
+        g = str(uuid.uuid4())
+        matched = p.pub_frame.get_subscription_count()
+        part = profiles[:300]
+        for i, prof in enumerate(part):
+            p.frame(g, i, prof)
+        p.close(g, len(part))
+        fg = p.wait_final(g, 60)
+        check(f"G (scan started before the publisher matched the detector: {'no' if matched else 'already'} "
+              f"matched at frame 0): all frames arrive, finalized successfully",
+              fg is not None and fg.success and fg.frame_count == len(part), fg and fg.error)
         check("detector subscribed to the tagged topics", p.connected())
 
         # ---- A: normal scan ----
@@ -265,6 +293,8 @@ def main():
         p.close(a, len(profiles))
         time.sleep(2.0)
         check("E: a late frame / close for a finalized scan does not reopen it", len(p.final[a]) == 1)
+        check("O: an earlier scan's frames from the history never open a scan", not p.final[old]
+              and not p.results[old] and not (OUT / "det" / old).exists())
 
         # ---- F: stream closed with an error ----
         e = str(uuid.uuid4())

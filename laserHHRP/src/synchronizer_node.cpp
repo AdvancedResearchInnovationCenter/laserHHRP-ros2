@@ -59,6 +59,8 @@ constexpr int64_t kIdentityWaitNs = 5000000000;  // after the stop, how long the
 using Pair = FramePairer::Pair;
 using ScanStatus = msg::ScanStatus;
 
+constexpr size_t kTaggedHistory = 1200;  // scan/frame_tagged frames kept for late-joining detectors
+
 class SynchronizerNode : public rclcpp::Node {
  public:
   // ---- setup ----
@@ -73,7 +75,11 @@ class SynchronizerNode : public rclcpp::Node {
     frame_pub_ = create_publisher<msg::ScanFrame>("scan/frame", rclcpp::QoS(200));
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("scan/pose", 200);
     stats_pub_ = create_publisher<msg::SyncStats>("scan/sync", 10);
-    tagged_pub_ = create_publisher<msg::TaggedScanFrame>("scan/frame_tagged", rclcpp::QoS(200));
+    // Transient local, 1200 deep (10 s at the 120 Hz maximum): a detector whose subscription the synchronizer
+    // matches only after the scan started (Fast DDS on the Pi: up to ~2 s after the backend sees it) still gets
+    // every frame. The detectors ignore frames exposed before they started (earlier scans).
+    tagged_pub_ = create_publisher<msg::TaggedScanFrame>("scan/frame_tagged",
+                                                         rclcpp::QoS(kTaggedHistory).reliable().transient_local());
     closed_pub_ = create_publisher<msg::ScanStreamClosed>(
         "scan/stream_closed", rclcpp::QoS(50).reliable().transient_local());
     session_sub_ = create_subscription<msg::ScanSessionState>(
