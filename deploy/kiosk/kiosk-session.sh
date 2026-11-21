@@ -101,10 +101,11 @@ watch_requests() {  # restart is done here; desktop ends the screen, the main lo
   done
 }
 
-wifi_watch() {  # Every boot on 2026-11-21 the Wi-Fi associated and got its address, yet nothing reached the Pi
-                # until a manual reconnect. Every 20 s: does the router answer? Changes are logged with the Wi-Fi
-                # state; when it stops answering, reconnect (allowed from this, the active session).
-  local gw dev con state last=""
+wifi_watch() {  # Every 20 s: does the router answer? Changes are logged with the Wi-Fi state. Reconnect (allowed
+                # from this, the active session) when the router stops answering, and when there is no connection
+                # for 40 s: on 5 GHz radar channels the association can take > 25 s at boot; NetworkManager then
+                # gives up for good ("no-secrets") until someone reconnects by hand (2026-11-21).
+  local gw dev con state last="" offline=0
   while sleep 20; do
     read -r gw dev < <(ip -4 route show default 2>/dev/null | awk '{print $3, $5; exit}')
     if [ -z "${gw:-}" ]; then state="no default route"
@@ -115,6 +116,16 @@ wifi_watch() {  # Every boot on 2026-11-21 the Wi-Fi associated and got its addr
       echo "$(date -Is) network: $state ($(iw dev "${dev:-wlan0}" get power_save 2>&1 | tr -d '\t'); $(iw dev "${dev:-wlan0}" link 2>&1 | grep -E 'SSID|freq' | tr -d '\t' | tr '\n' ' '))"
       last="$state"
     fi
+    if [ "$state" = "no default route" ]; then
+      offline=$((offline + 1))
+      if [ "$offline" -ge 2 ]; then   # device connect also clears NetworkManager's autoconnect block
+        if nmcli device connect wlan0 >/dev/null 2>&1; then echo "$(date -Is) network: wlan0 connected again"
+        else echo "$(date -Is) network: connecting wlan0 failed (next try in 40 s)"; fi
+        offline=0; last=""
+      fi
+      continue
+    fi
+    offline=0
     case "$state" in *NOT*)
       con="$(nmcli -t -g GENERAL.CONNECTION device show "$dev" 2>/dev/null)"
       if [ -n "$con" ] && nmcli connection up "$con" >/dev/null 2>&1; then
