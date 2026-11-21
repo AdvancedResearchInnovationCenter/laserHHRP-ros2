@@ -117,6 +117,9 @@ def test_readiness_freshness_matches_controller_limits():
     c.laser_t = 101.5
     assert not c.hardware(status(), now=101.6).laser_ok                       # fresh but disconnected
     assert c.hardware(status(calibration=1), now=101.6).calibrated is False
+    assert c.hardware(status(calibration=1), now=101.6).calibrating is True       # CalibrationStatus.CALIBRATING
+    assert c.hardware(status(calibration=0), now=101.6).calibrating is False
+    assert c.hardware(status(calibration=2), now=101.6).calibrating is False
     assert c.hardware(status(state=7), now=101.6).scan_state == "UNKNOWN(7)"
 
 

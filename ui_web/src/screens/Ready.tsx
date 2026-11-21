@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Snapshot } from "../api/types";
 import { countText, statusOf, TARGET_NOUN } from "../lib/format";
+import { CalibrateDialog } from "../ui/Device";
 import { Keypad } from "../ui/Keyboard";
 import { Confirm, Modal } from "../ui/Modal";
 import type { Run } from "./common";
@@ -16,6 +17,10 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
   const [pending, setPending] = useState<number | null>(null);    // optimistic stepper value
   const [pad, setPad] = useState<string | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [calibrate, setCalibrate] = useState(false);
+  const canCalibrate = snap.device.can_calibrate;
+  const calibrating = !!snap.hardware?.calibrating;
+  const needsCalibration = canCalibrate && snap.not_ready_reasons.includes("Calibration required");
   useEffect(() => setPending(null), [count]);
   const shown = pending ?? count;
 
@@ -46,6 +51,9 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
             <ul className="reasons">
               {snap.not_ready_reasons.map((r) => <li key={r}>{r}</li>)}
             </ul>
+            {needsCalibration && (
+              <button className="primary" onClick={() => setCalibrate(true)}>Calibrate</button>
+            )}
             {detectorProblem && (
               <button className="secondary" onClick={() => void run(api.restartDetector())}>Restart detector</button>
             )}
@@ -79,6 +87,9 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
       <div className="bar">
         <button className="secondary" onClick={openHistory}>History ({insp.scan_count})</button>
         <span className="spacer" />
+        {canCalibrate && (
+          <button className="secondary" disabled={calibrating} onClick={() => setCalibrate(true)}>Calibrate gyro</button>
+        )}
         <button className="secondary" onClick={() => setConfirmEnd(true)}>End inspection</button>
       </div>
       {pad !== null && (
@@ -88,6 +99,7 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
                   onSubmit={() => { setPad(null); void setCount(padValue); }} />
         </Modal>
       )}
+      {calibrate && <CalibrateDialog snap={snap} run={run} onClose={() => setCalibrate(false)} />}
       {confirmEnd && (
         <Confirm title="End inspection?" confirmLabel="End inspection"
                  text={<>Closes <strong>{insp.label}</strong>. Its scans stay in history. The next inspection can use a different mode.</>}

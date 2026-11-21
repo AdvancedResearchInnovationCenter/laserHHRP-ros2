@@ -25,7 +25,7 @@ from .events import (DetectionFinalized, HardwareStatus, LegacyResult, MeasuredV
 
 log = logging.getLogger("laser_hhrp_ui.ros_bridge")
 STATES = {0: "IDLE", 1: "SCANNING", 2: "PAUSED", 3: "ERROR"}
-CALIBRATED = 2
+CALIBRATING, CALIBRATED = 1, 2
 LASER_FRESH_S, NANO_FRESH_S, STORAGE_FRESH_S = 3.0, 1.5, 5.0
 
 
@@ -53,6 +53,7 @@ class ReadinessCache:
         return HardwareStatus(
             scan_state=STATES.get(int(status.state), f"UNKNOWN({status.state})"),
             calibrated=int(status.calibration) == CALIBRATED,
+            calibrating=int(status.calibration) == CALIBRATING,
             laser_ok=laser_ok, nano_ok=nano_fresh, encoder_ok=bool(nano_fresh and self.nano.encoder_ok),
             free_mb=float(self.storage.free_mb) if storage_fresh else None,
             storage_write_failed=bool(storage_fresh and self.storage.write_failed),

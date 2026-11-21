@@ -92,3 +92,20 @@ export function mismatchText(expected: number | null, detected: number): string 
 export function countText(expected: number | null, detected: number): string {
   return expected === null ? String(detected) : `${detected} / ${expected}`;
 }
+
+/** Outcome of a gyro calibration in operator words, from the controller's message (scan/status), which
+ *  holds the calibration's result for 20 s: "gyro calibrated", "gyro calibrated (could not write …)" or
+ *  "calibration failed: <why>". A failed calibration keeps the previous values, so `calibrated` alone does
+ *  not tell success. */
+export function calibrationOutcome(message: string, calibrated: boolean): { tone: Tone; text: string; detail: string } {
+  const m = message.trim();
+  if (m.startsWith("calibration failed")) {
+    return { tone: "bad", detail: m.replace(/^calibration failed:\s*/, ""),
+             text: "Calibration failed: the device was not still. Put it down on a steady surface and try again." };
+  }
+  if (m.startsWith("gyro calibrated") && m.includes("could not write")) {
+    return { tone: "warn", detail: m, text: "Calibrated, but it could not be saved. Calibrate again after the next start." };
+  }
+  if (m.startsWith("gyro calibrated") || calibrated) return { tone: "ok", detail: "", text: "Calibration done." };
+  return { tone: "bad", detail: m, text: "Calibration did not finish. Try again." };
+}

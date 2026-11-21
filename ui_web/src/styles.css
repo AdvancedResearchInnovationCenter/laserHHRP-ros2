@@ -74,6 +74,7 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .spacer { flex: 1; }
+.ok-text { color: var(--ok); }
 .warn-text { color: var(--warn); }
 .bad-text { color: var(--bad); }
 .center-text { margin: auto; }
@@ -106,7 +107,7 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .state-pill.neutral { background: var(--surface-2); color: var(--fg); }
 .rec { width: 10px; height: 10px; border-radius: 50%; background: #fff; animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0.2; } }
-.hdr-insp { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
+.hdr-insp { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 330px; }
 .hdr-op { font-weight: 600; padding: 0 4px; }
 .hdr-alerts { height: 48px; min-width: 64px; border-radius: 0; border: none; font-weight: 700; margin: 0 -2px; }
 .hdr-alerts.warn { background: var(--warn-bg); color: var(--warn); }
@@ -116,6 +117,11 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .hdr-theme {
   width: 48px; height: 48px; padding: 0; margin-right: -12px; border: none; border-radius: 0;
   background: transparent; color: var(--muted); opacity: 0.45; font-size: 15px;
+}
+/* turn off: full 48 px touch target, plain symbol */
+.hdr-power {
+  width: 48px; height: 48px; padding: 0; border: none; border-radius: 0; margin: 0 -4px;
+  background: transparent; color: var(--fg); font-size: 24px; line-height: 1;
 }
 .conn.on { background: var(--ok); }
 .conn.off { background: var(--bad); }
@@ -332,3 +338,8 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .dev-toggle { min-height: 30px; min-width: 40px; height: 30px; padding: 0 8px; font-size: 12px; opacity: 0.55; }
 .devbar.open .dev-toggle { height: 48px; opacity: 1; }
 .dev-hold { background: var(--accent); color: #fff; }
+
+/* ---------- device actions ---------- */
+.powering-off { align-items: center; justify-content: center; text-align: center; font-size: 20px; }
+.powering-off .status-big { font-size: 44px; font-weight: 800; }
+.calib-running { padding: 18px 0 8px; font-size: 22px; font-weight: 700; }

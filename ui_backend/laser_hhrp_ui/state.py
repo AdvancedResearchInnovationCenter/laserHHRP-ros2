@@ -17,6 +17,7 @@ import uuid as uuidlib
 from dataclasses import dataclass
 
 from . import models, raw_recording
+from .device import NoDevice
 from .clock import Clock, iso
 from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, MeasurementFinalized,
                      MeasurementStatus, RecordingSession, ScanTransition, StreamClosed, TaggedResult)
@@ -67,6 +68,8 @@ class Engine:
         self.clock = clock or Clock()
         self.emit = emit or (lambda *a, **k: None)
         self.detector_control = detector_control or NullDetectorControl()
+        self.device = NoDevice()                  # calibration / power off (device.py), set by the server
+        self.powering_off = False                 # the operator turned the device off: nothing else is accepted
         self.warn_after_s, self.fail_after_s = warn_after_s, fail_after_s
         self.hardware_stale_s = hardware_stale_s
         self.orphan_limit, self.orphan_ttl_s = orphan_limit, orphan_ttl_s
@@ -147,7 +150,9 @@ class Engine:
         if hw is not None and self.hardware_fresh():
             if hw.scan_state not in ("IDLE",):
                 reasons.append(f"Scanner state {hw.scan_state}")
-            if not hw.calibrated:
+            if hw.calibrating:
+                reasons.append("Calibrating: keep the device still")
+            elif not hw.calibrated:
                 reasons.append("Calibration required")
             for f in hw.fatal:
                 reasons.append(f"Fault: {f}")
@@ -265,6 +270,7 @@ class Engine:
         if hw is None:
             return None
         return {"fresh": self.hardware_fresh(), "scan_state": hw.scan_state, "calibrated": hw.calibrated,
+                "calibrating": hw.calibrating,
                 "laser_ok": hw.laser_ok, "nano_ok": hw.nano_ok, "encoder_ok": hw.encoder_ok,
                 "free_mb": hw.free_mb, "storage_write_failed": hw.storage_write_failed,
                 "distance_mm": round(hw.position_m * 1000.0, 1), "message": hw.message,
@@ -285,6 +291,7 @@ class Engine:
             "detector": {"mode": self.detector.mode, "alive": self.detector.alive,
                          "ready": self.detector.ready, "error": self.detector.error},
             "source": self.source, "clock_quality": self.clock.quality(),
+            "device": self.device_view(),
             "current_scan": self.scan_view(current, features=True) if current else None,
             "recent_scans": [self.scan_view(s) for s in history],
             "pending_scans": [self.scan_view(s) for s in self.repo.scans_where("analysis = 'pending'")],
@@ -292,10 +299,14 @@ class Engine:
             "preview_notice": PREVIEW_NOTICE if self.preview_mode else None,
         }
 
+    def device_view(self) -> dict:
+        return {"can_calibrate": bool(self.device.can_calibrate), "can_power_off": bool(self.device.can_power_off),
+                "powering_off": self.powering_off}
+
     # ------------------------------------------------------------------ emit helpers
     def _emit_system(self, force: bool = True) -> None:
         ready, reasons, warnings = self.readiness()
-        key = (ready, tuple(reasons), tuple(warnings), self.screen().value, len(self.alerts))
+        key = (ready, tuple(reasons), tuple(warnings), self.screen().value, len(self.alerts), self.powering_off)
         if not force and key == self._last_ready_key:
             return
         self._last_ready_key = key
@@ -964,6 +975,53 @@ class Engine:
         self._emit_scan("scan_decision", scan)
         self._emit_system()
         return self.scan_view(scan)
+
+    # ------------------------------------------------------------------ device actions (device.py)
+    def _acquiring(self) -> bool:
+        hw_scanning = self.hardware_fresh() and self.hardware.scan_state in HW_ACQUIRING
+        return hw_scanning or bool(self.repo.scans_where("acquisition IN ('scanning', 'paused')"))
+
+    def _actor(self) -> str | None:
+        op = self.operator
+        return op["operator_id"] if op else None
+
+    def check_calibrate(self) -> None:
+        """Gyro calibration only with the device idle: calibration_node itself does not refuse during a scan."""
+        if not self.device.can_calibrate:
+            raise CommandError(409, "unavailable", "Calibration is not available here")
+        if self.powering_off:
+            raise CommandError(409, "powering_off", "The device is turning off")
+        if not self.hardware_fresh():
+            raise CommandError(409, "no_hardware", "No current hardware status: calibration needs the device")
+        if self.hardware.scan_state != "IDLE" or self._acquiring():
+            raise CommandError(409, "scanning", "Not during a scan: release the switch first")
+        if self.hardware.calibrating:
+            raise CommandError(409, "calibrating", "Calibration is already running")
+
+    def record_calibration(self, started: bool, message: str) -> dict:
+        self._audit("calibration_requested", actor=self._actor(), started=started, message=message)
+        if not started:
+            raise CommandError(409, "calibration_refused", message or "Calibration did not start")
+        return {"started": True, "message": message}
+
+    def begin_power_off(self) -> bool:
+        """True: the caller runs the power-off command now. False: already turning off (a repeated tap)."""
+        if not self.device.can_power_off:
+            raise CommandError(409, "unavailable", "Turning off is not enabled on this device")
+        if self.powering_off:
+            return False
+        if self._acquiring():
+            raise CommandError(409, "scanning", "A scan is running: release the switch and wait for the analysis")
+        if self.repo.scans_where("analysis = 'pending'"):
+            raise CommandError(409, "analyzing", "Wait until the analysis has finished")
+        self.powering_off = True
+        self._audit("power_off_requested", actor=self._actor())
+        self._emit_system()
+        return True
+
+    def power_off_failed(self, message: str) -> None:
+        self.powering_off = False
+        self._alert("power_off_failed", message)
 
     def decide(self, scan_id: str, raw) -> dict:
         choice = {"accept": Decision.ACCEPTED, "rescan": Decision.RESCANNED}.get(raw)

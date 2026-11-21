@@ -45,10 +45,11 @@ export function snapshot(over: Partial<Snapshot> = {}): Snapshot {
     },
     ready: true, not_ready_reasons: [], warnings: [], alerts: [],
     hardware: {
-      fresh: true, scan_state: "IDLE", calibrated: true, laser_ok: true, nano_ok: true, encoder_ok: true,
+      fresh: true, scan_state: "IDLE", calibrated: true, calibrating: false, laser_ok: true, nano_ok: true, encoder_ok: true,
       free_mb: 9000, storage_write_failed: false, distance_mm: 0, message: "", fatal: [], warnings: [],
     },
     detector: { mode: "csk_depth", alive: true, ready: true, error: "" },
+    device: { can_calibrate: true, can_power_off: true, powering_off: false },
     source: "ros", clock_quality: "synced", current_scan: null, recent_scans: [], pending_scans: [],
     preview: null, preview_notice: null,
     ...over,

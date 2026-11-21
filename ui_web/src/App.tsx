@@ -10,6 +10,7 @@ import { Results } from "./screens/Results";
 import { Scanning } from "./screens/Scanning";
 import { Setup } from "./screens/Setup";
 import type { Run } from "./screens/common";
+import { PoweringOff } from "./ui/Device";
 import { AlertStrip, Header } from "./ui/Header";
 import { useBackend } from "./state/useBackend";
 
@@ -62,8 +63,12 @@ export function Shell({ snap, connected, run, toast }: {
   }, [snap.screen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const openHistory = () => snap.inspection && setOverlay({ kind: "history", uuid: snap.inspection.uuid, back: null });
+  // Turning off: the backend stops shortly; this stays on screen (not the offline notice) until it is dark.
+  const poweringOff = snap.device.powering_off;
   let body;
-  if (overlay?.kind === "history") {
+  if (poweringOff) {
+    body = <PoweringOff />;
+  } else if (overlay?.kind === "history") {
     body = <History snap={snap} uuid={overlay.uuid} run={run} onBack={() => setOverlay(overlay.back)} />;
   } else if (overlay?.kind === "past") {
     body = <PastInspections onBack={() => setOverlay(null)}
@@ -76,10 +81,10 @@ export function Shell({ snap, connected, run, toast }: {
   const dev = snap.source === "mock" && !kiosk;
   return (
     <div className="app">
-      <Header snap={snap} connected={connected} />
+      <Header snap={snap} connected={connected} run={run} />
       <AlertStrip snap={snap} />
       <main className={connected ? "main" : "main stale"}>{body}</main>
-      {!connected && (
+      {!connected && !poweringOff && (
         <div className="offline" role="alert">
           <strong>Connection to the backend lost</strong>
           <span>Reconnecting… This screen is not current.</span>
@@ -87,7 +92,7 @@ export function Shell({ snap, connected, run, toast }: {
         </div>
       )}
       {toast && <div className="toast" role="status">{toast}</div>}
-      {dev && <DevBar run={run} />}
+      {dev && !poweringOff && <DevBar run={run} />}
     </div>
   );
 }

@@ -121,6 +121,7 @@ class HardwareStatus:
     """Aggregated readiness from scan/status, laser/status, nano/status, scan/storage (plan section 9)."""
     scan_state: str = "IDLE"
     calibrated: bool = False
+    calibrating: bool = False    # gyro calibration running (CalibrationStatus.CALIBRATING)
     laser_ok: bool = False       # laser/status connected and fresh (< 3 s)
     nano_ok: bool = False        # nano/status fresh (< 1.5 s)
     encoder_ok: bool = False

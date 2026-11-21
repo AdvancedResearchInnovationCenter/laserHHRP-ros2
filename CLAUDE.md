@@ -80,7 +80,8 @@ cd ui_backend && python3 -m laser_hhrp_ui.server --mock --static ../ui_web/dist 
 - For a service or script, start `install/laser_hhrp_ui/lib/laser_hhrp_ui/server` directly: the `ros2 run`
   wrapper does not forward SIGTERM and orphans the server and its detector.
 - On the Pi: `~/aric_ws/start_simulation.sh` and `~/aric_ws/start_hardware.sh` (core + backend + Chromium kiosk;
-  these scripts live only on the Pi). The simulator script keeps its HOME in `~/aric_ws/operator_ui/simhome`
+  these scripts live only on the Pi). For operators: `deploy/kiosk/` (`sudo ./install.sh`): GDM autologin into a
+  cage session with only the operator screen; core, backend and Chromium restarted if they exit. The simulator script keeps its HOME in `~/aric_ws/operator_ui/simhome`
   so it never touches the device calibration in `~/laser_hhrp/calibration.yaml`.
 
 ## Tests
@@ -123,6 +124,10 @@ thread: the authoritative lifecycle and completion barrier) → SQLite (`reposit
 `PRAGMA user_version`) + WebSocket/HTTP (`api.py`, `hub.py`) → browser. `detector_supervisor.py` runs one
 allowlisted detector process per inspection, output in
 `~/.local/share/laser_hhrp/ui/detector-output/<inspection>/<scan>/` (summary.csv + one PCD per feature).
+
+**Device actions.** `device.py`: gyro calibration (`calibration/start`) and power off (`--power-off-command`) from
+the screens, so the device needs no terminal (approved deviation from plan §3). The Engine refuses both during a
+scan, power off also while an analysis is pending. Scan start / stop stays on the physical switch.
 
 **Completion rules (each guarded by a test and a mutation).** A scan is complete only with a confirmed stop,
 stream close and detector finalization with equal frame counts, every declared `result_seq` committed,

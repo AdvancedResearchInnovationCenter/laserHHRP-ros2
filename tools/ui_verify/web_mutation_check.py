@@ -53,13 +53,26 @@ MUTATIONS = [
     ("Scanning counts circles for non-target features [5 filter]", "src/screens/Scanning.tsx",
      "const targets = features.filter((f) => f.is_target);", "const targets = features;"),
     ("Offline state not shown [8 browser crash/reload]", "src/App.tsx",
-     "      {!connected && (\n        <div className=\"offline\"", "      {false && (\n        <div className=\"offline\""),
+     "      {!connected && !poweringOff && (\n        <div className=\"offline\"", "      {false && (\n        <div className=\"offline\""),
     ("Duplicate events accepted [7 event_seq]", "src/state/snapshotSync.ts",
      "if (eventSeq <= this.seq) return false;", "if (eventSeq < this.seq) return false;"),
     ("Not-ready reasons not listed [9 ready policy]", "src/screens/Ready.tsx",
      "{snap.not_ready_reasons.map((r) => <li key={r}>{r}</li>)}", "{null}"),
     ("Unverified clock not flagged [8 offline time]", "src/ui/Header.tsx",
      '{snap.clock_quality === "unverified" && <span className="pill warn">Time not verified</span>}', "{null}"),
+    # operator device actions (backend device.py)
+    ("Turn off offered during a scan [device]", "src/ui/Device.tsx",
+     'export const POWER_OFF_SCREENS: readonly Screen[] = ["identify", "setup", "ready", "not_ready"];',
+     'export const POWER_OFF_SCREENS: readonly Screen[] = ["identify", "setup", "ready", "not_ready", "scanning"];'),
+    ("Turn off offered without a power-off command [device]", "src/ui/Device.tsx",
+     "return connected && snap.device.can_power_off && !snap.device.powering_off",
+     "return connected && !snap.device.powering_off"),
+    ("Turning off replaced by the offline notice [device]", "src/App.tsx",
+     "{!connected && !poweringOff && (", "{!connected && ("),
+    ("Failed calibration reported as done [device]", "src/lib/format.ts",
+     'if (m.startsWith("calibration failed")) {', 'if (false) {'),
+    ("Second calibration offered while one runs [device]", "src/screens/Ready.tsx",
+     'disabled={calibrating} onClick={() => setCalibrate(true)}>Calibrate gyro', 'onClick={() => setCalibrate(true)}>Calibrate gyro'),
 ]
 
 

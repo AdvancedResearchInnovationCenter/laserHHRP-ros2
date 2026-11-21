@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Starting</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1216; color: #e8edf2; font: 20px system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+  h1 { font-size: 40px; margin: 0; }
+  p { margin: 0; color: #8a96a3; }
+</style>
+</head>
+<body>
+<h1>Starting the scanner…</h1>
+<p id="note">Please wait</p>
+<script>
+  // The kiosk opens this page before the backend is up; it switches to the operator UI once the backend answers.
+  const BASE = "http://127.0.0.1:8080";
+  const started = Date.now();
+  async function poll() {
+    try {
+      await fetch(BASE + "/api/v1/health", { mode: "no-cors", cache: "no-store" });
+      location.replace(BASE + "/?kiosk");
+    } catch (e) {
+      if (Date.now() - started > 90000)
+        document.getElementById("note").textContent = "This takes longer than usual. Turn the device off and on if it stays here.";
+      setTimeout(poll, 500);
+    }
+  }
+  poll();
+</script>
+</body>
+</html>

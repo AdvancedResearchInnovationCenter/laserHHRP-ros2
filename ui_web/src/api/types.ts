@@ -68,6 +68,8 @@ export interface Snapshot {
   hardware: Hardware | null;
   detector: { mode: Mode | null; alive: boolean; ready: boolean; error: string };
   source: "none" | "mock" | "ros"; clock_quality: string;
+  // operator device actions (backend device.py): which are offered, and whether the device is turning off
+  device: { can_calibrate: boolean; can_power_off: boolean; powering_off: boolean };
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
   preview: Preview | null;            // Phase 2 live view: shown, never recorded
   preview_notice: string | null;
@@ -75,7 +77,7 @@ export interface Snapshot {
 }
 
 export interface Hardware {
-  fresh: boolean; scan_state: string; calibrated: boolean; laser_ok: boolean; nano_ok: boolean; encoder_ok: boolean;
+  fresh: boolean; scan_state: string; calibrated: boolean; calibrating: boolean; laser_ok: boolean; nano_ok: boolean; encoder_ok: boolean;
   free_mb: number | null; storage_write_failed: boolean; distance_mm: number; message: string;
   fatal: string[]; warnings: string[];
 }

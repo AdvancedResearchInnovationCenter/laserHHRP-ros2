@@ -23,7 +23,7 @@ from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, Measure
 from .models import Mode
 
 FAULTS = ("detector_failure", "missing_result", "reorder", "error_stop", "stall", "detector_crash",
-          "frame_mismatch", "measurement_failure")
+          "frame_mismatch", "measurement_failure", "calibration_failure")
 # the hhrp.yaml GO ranges (m) and a spread that puts a few features outside them
 MOCK_LIMITS = {Mode.CSK_DEPTH: ("csk_depth", 0.000947, 0.001147, 0.000997, 0.00007),
                Mode.RIVET_FLUSHNESS: ("flushness", -0.00015, 0.00005, -0.00005, 0.00007)}
@@ -48,12 +48,15 @@ class MockRos:
         self.seq = 0
         self.mode: Mode | None = None
         self.detector_alive = False
-        self.hw = dict(scan_state="IDLE", calibrated=True, laser_ok=True, nano_ok=True, encoder_ok=True,
+        self.hw = dict(scan_state="IDLE", calibrated=True, calibrating=False, laser_ok=True, nano_ok=True, encoder_ok=True,
                        free_mb=12000.0, storage_write_failed=False, fatal=(), warnings=(), position_m=0.0,
                        message="")
         self.faults: set[str] = set()
         self.active: dict | None = None
         self.tasks: set[asyncio.Task] = set()
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.calibrate_s = 2.0                  # calibration_node's default stillness window
+        self.power_off_requests = 0             # the mock never turns anything off
 
     # ---- timing ----
     async def sleep(self, seconds: float) -> None:
@@ -86,6 +89,7 @@ class MockRos:
         return HardwareStatus(**self.hw)
 
     async def run(self) -> None:
+        self.loop = asyncio.get_running_loop()
         self.submit(MeasurementStatus(available=True))
         while True:
             self.submit(self.hardware_status())
@@ -97,6 +101,32 @@ class MockRos:
             raise ValueError(f"unknown hardware fields {sorted(unknown)}")
         self.hw.update(fields)
         self.submit(self.hardware_status())
+
+    # ---- device actions (device.py interface; called on a worker thread) ----
+    can_calibrate = True
+    can_power_off = True
+
+    def calibrate(self) -> tuple[bool, str]:
+        if self.loop is None:
+            return False, "mock not running"
+        if self.hw["calibrating"]:
+            return False, "calibration already running"
+        self.loop.call_soon_threadsafe(lambda: self._spawn(self._calibrate()))
+        return True, "calibrating: hold the device still"
+
+    async def _calibrate(self) -> None:
+        before = self.hw["calibrated"]
+        self.set_hardware(calibrating=True, calibrated=False, message="calibrating: hold the device still")
+        await self.sleep(self.calibrate_s)
+        if self._take("calibration_failure"):     # like calibration_node: old values kept on failure
+            self.set_hardware(calibrating=False, calibrated=before,
+                              message="calibration failed: device never still long enough")
+        else:
+            self.set_hardware(calibrating=False, calibrated=True, message="gyro calibrated")
+
+    def power_off(self) -> tuple[bool, str]:
+        self.power_off_requests += 1
+        return True, "Turning off (mock: nothing is turned off)"
 
     # ---- detector supervisor (DetectorControl interface) ----
     def request(self, mode: Mode, inspection_uuid: str | None = None) -> None:

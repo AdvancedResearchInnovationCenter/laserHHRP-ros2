@@ -5,7 +5,8 @@ Request bodies are parsed and validated by hand (models.py), so the code does no
 pydantic major version (laptop pip: v2, Ubuntu 24.04 apt: v1).
 
 No endpoint starts or stops the physical scan. The /api/v1/dev/mock/* routes exist only when the
-server runs with the mock source, never with the live ROS bridge.
+server runs with the mock source, never with the live ROS bridge. /api/v1/device/* are the operator's gyro
+calibration and power off (device.py): refused during a scan, power off also while an analysis is pending.
 """
 
 from __future__ import annotations
@@ -166,6 +167,31 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
             return _error(400, "invalid", e.message, e.field)
         return await _run(engine.failure_action, scan_id, body.get("action"))
 
+    # ---- device actions (device.py): the Engine checks, a worker thread carries them out ----
+    @app.post(P + "/device/calibrate")
+    async def calibrate():
+        try:
+            engine.check_calibrate()
+        except CommandError as e:
+            return _error(e.status, e.code, e.message, e.field)
+        started, message = await asyncio.get_running_loop().run_in_executor(None, engine.device.calibrate)
+        return await _run(engine.record_calibration, started, message)
+
+    @app.post(P + "/device/power-off")
+    async def power_off():
+        try:
+            first = engine.begin_power_off()
+        except CommandError as e:
+            return _error(e.status, e.code, e.message, e.field)
+        if first:
+            ok, message = await asyncio.get_running_loop().run_in_executor(None, engine.device.power_off)
+            if not ok:
+                log.error("power off failed: %s", message)
+                engine.power_off_failed(message)
+                return _error(500, "power_off_failed", message)
+            log.warning("power off requested by the operator")
+        return {"powering_off": True}
+
     # ---- export (plan sections 7, 8) ----
     @app.get(P + "/inspections/{uuid}/export.csv")
     async def export_csv(uuid: str):
@@ -257,6 +283,13 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
             except (models.ValidationError, ValueError, TypeError) as e:
                 return _error(400, "invalid", str(e))
             return mock.state()
+
+        @app.post(P + "/dev/mock/power-on")
+        async def mock_power_on():
+            """The mock turns nothing off: end its 'turning off' so a check can go on."""
+            engine.powering_off = False
+            engine._emit_system()
+            return engine.device_view()
 
         @app.post(P + "/dev/mock/layout")
         async def mock_layout(request: Request):

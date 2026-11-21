@@ -134,6 +134,26 @@ MUTATIONS = [
     ("Detector's own value shown as the measurement [1, 8]", "models.py",
      '    return {"name": name, "value_mm": None, "unit": "mm", "status": "pending",',
      '    return {"name": name, "value_mm": raw_value_m, "unit": "mm", "status": "pending",'),
+    # operator device actions (device.py, approved deviation from plan section 3)
+    ("Gyro calibration allowed during a scan [device]", "state.py",
+     'if self.hardware.scan_state != "IDLE" or self._acquiring():', "if False:"),
+    ("Second calibration started while one runs [device]", "state.py",
+     "        if self.hardware.calibrating:\n            raise CommandError(409, \"calibrating\"",
+     "        if False:\n            raise CommandError(409, \"calibrating\""),
+    ("Power off while an analysis is pending [device]", "state.py",
+     "if self.repo.scans_where(\"analysis = 'pending'\"):\n            raise CommandError(409, \"analyzing\"",
+     "if False:\n            raise CommandError(409, \"analyzing\""),
+    ("Power off during a scan [device]", "state.py",
+     "        if self._acquiring():\n            raise CommandError(409, \"scanning\", \"A scan is running",
+     "        if False:\n            raise CommandError(409, \"scanning\", \"A scan is running"),
+    ("A repeated Turn off runs the command twice [device]", "state.py",
+     "        if self.powering_off:\n            return False", "        if False:\n            return False"),
+    ("Failed power off leaves the screen saying it is turning off [device]", "state.py",
+     "    def power_off_failed(self, message: str) -> None:\n        self.powering_off = False",
+     "    def power_off_failed(self, message: str) -> None:\n        pass"),
+    ("Calibration running shown as 'Calibration required' [device]", "state.py",
+     "            if hw.calibrating:\n                reasons.append(\"Calibrating: keep the device still\")\n            elif",
+     "            if False:\n                pass\n            elif"),
 ]
 
 

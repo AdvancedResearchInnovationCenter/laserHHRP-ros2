@@ -124,6 +124,8 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
 | `POST /api/v1/inspections/{uuid}/end` | | 409 while acquiring/analysing; idempotent |
 | `PATCH /api/v1/inspections/{uuid}/next-expected-count` | `{count}` | 1..500, only on Ready / Not ready |
 | `POST /api/v1/detector/restart` | | explicit recovery after a detector crash or failed start |
+| `POST /api/v1/device/calibrate` | | gyro calibration (`calibration/start`); 409 during a scan, while one runs, without current hardware status; the outcome comes in `hardware.calibrating` / `hardware.message` |
+| `POST /api/v1/device/power-off` | | runs `--power-off-command` (e.g. `systemctl poweroff`); 409 during a scan or a pending analysis or when not configured; `device.powering_off` until the system stops the backend; a repeated call runs nothing |
 | `GET /api/v1/inspections/{uuid}/scans` | | history, oldest first |
 | `GET /api/v1/scans/{scan_id}` | | scan with features |
 | `POST /api/v1/scans/{scan_id}/decision` | `{decision: accept\|rescan}` | completed analyses only (including earlier undecided scans); idempotent |
@@ -144,7 +146,8 @@ analysis state/error, frame count, feature id, kind, target flag, x/y/z mm, diam
 scanned share, fit RMS, measurement name/status/value, `measurement_verdict` (in_limits / out_of_limits),
 `limit_lower_mm`, `limit_upper_mm`, `measurement_reason`. Free-text cells that start with `= + - @` get a leading `'`.
 **No endpoint starts or stops the physical scan.** `/api/v1/dev/mock/*` (press, release, scenario,
-fault, hardware, layout) exist **only with `--mock`**.
+fault, hardware, layout, power-on) exist **only with `--mock`** (the mock calibrates in 2 s and turns nothing off).
+`snapshot.device` = `{can_calibrate, can_power_off, powering_off}`: which device actions the screens offer.
 
 **Envelope:** `{version: 1, event_seq, type, timestamp, inspection_id, scan_id, payload}`. Types:
 `snapshot`, `system_state`, `scan_progress`, `feature_detected`, `scan_acquisition_ended`,
@@ -172,6 +175,10 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
   GO / NO-GO per feature, against the limits given for the repeatability trials (`hhrp.yaml` `inspection.*`).
   The algorithms' accuracy against gauge readings is not yet established; the operator decision (Accept /
   Rescan) is unchanged and not tied to the verdicts.
+- Plan section 3 (the backend only observes ROS, no device control from the web): since 2026-11-21 the screens
+  calibrate the gyro (`calibration/start`) and turn the device off (`--power-off-command`), so the device runs
+  without a terminal (operator kiosk, `deploy/kiosk/`). Both are refused during a scan, power off also while an
+  analysis is pending; `device.py`, tests in `test/test_device.py`. Scan start / stop stays on the switch.
 
 ## Not yet
 

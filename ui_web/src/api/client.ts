@@ -38,6 +38,9 @@ export const api = {
   scans: (uuid: string) => call<Scan[]>("GET", `/inspections/${uuid}/scans`),
   scan: (scanId: string) => call<Scan>("GET", `/scans/${scanId}`),
   restartDetector: () => call("POST", "/detector/restart"),
+  // the backend refuses both during a scan (and power off while an analysis is pending)
+  calibrate: () => call<{ started: boolean; message: string }>("POST", "/device/calibrate"),
+  powerOff: () => call<{ powering_off: boolean }>("POST", "/device/power-off"),
   // GET download: the browser saves the file; nothing is written on the server
   csvUrl: (uuid: string) => `${P}/inspections/${uuid}/export.csv`,
   usbTargets: () => call<{ targets: UsbTarget[]; roots: string[] }>("GET", "/exports/usb"),

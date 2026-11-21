@@ -1,6 +1,6 @@
 // Map contract (plan section 9), count circles (9.3) and display wording.
 import { circleModel, circleSize, MAX_CIRCLES } from "../src/lib/circles";
-import { countText, measurementReason, measurementValue, mismatchText, rangeText, REASON_TEXT, STATUS } from "../src/lib/format";
+import { calibrationOutcome, countText, measurementReason, measurementValue, mismatchText, rangeText, REASON_TEXT, STATUS } from "../src/lib/format";
 import { fromPx, layoutMap, MIN_HIT_PX, MIN_SPAN_MM, pick, radiusPx, scaleBar, toPx } from "../src/lib/map";
 import { assert, type Test } from "./t";
 
@@ -116,5 +116,15 @@ export const tests: Test[] = [
     assert.equal(measurementReason({ ...base, status: "not_measured", value_mm: null, reason: "brand_new_code" }),
                  REASON_TEXT.failed);
     assert.equal(measurementReason({ ...base, status: "measured", value_mm: 1 }), null);
+  }],
+  ["calibration outcome: a failure is told even though the old calibration is kept", () => {
+    const failed = calibrationOutcome("calibration failed: device never still long enough", true);
+    assert.equal(failed.tone, "bad");
+    assert.ok(failed.text.startsWith("Calibration failed"), failed.text);
+    assert.equal(failed.detail, "device never still long enough");
+    assert.equal(calibrationOutcome("gyro calibrated", true).tone, "ok");
+    assert.equal(calibrationOutcome("gyro calibrated (could not write /x.yaml)", true).tone, "warn");
+    assert.equal(calibrationOutcome("", false).tone, "bad");                // never reported done
+    assert.equal(calibrationOutcome("FATAL laser: gone", true).tone, "ok");  // result message expired, calibrated
   }],
 ];
