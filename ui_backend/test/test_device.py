@@ -103,6 +103,7 @@ def test_power_off_not_offered_without_a_command():
     h = Harness()
     h.engine.device = RosDevice(lambda: None, power_off_command=None)
     assert h.engine.snapshot()["device"] == {"can_calibrate": True, "can_power_off": False, "powering_off": False,
+                                             "power_action": None, "can_reboot": False,
                                              "can_service": False, "switching": None}
     refused(h.engine.begin_power_off, "unavailable")
     h.engine.device = NoDevice()
@@ -176,7 +177,7 @@ def test_power_off_over_http(app_parts):
     client, engine, mock = app_parts
     ready(client)
     r = client.post(P + "/device/power-off")
-    assert r.status_code == 200 and r.json() == {"powering_off": True}
+    assert r.status_code == 200 and r.json() == {"powering_off": True, "action": "off"}
     assert client.post(P + "/device/power-off").status_code == 200
     assert mock.power_off_requests == 1                               # ran once
     assert state(client)["device"]["powering_off"] is True
@@ -186,6 +187,7 @@ def test_live_backend_without_ros_offers_neither_action(tmp_path):
     app, engine, *_ = build(tmp_path / "ui.db", mock=False, clock=Clock("synced"))
     with TestClient(app) as client:
         assert state(client)["device"] == {"can_calibrate": False, "can_power_off": False, "powering_off": False,
+                                           "power_action": None, "can_reboot": False,
                                            "can_service": False, "switching": None}
         for path in ("/device/calibrate", "/device/power-off"):
             r = client.post(P + path)
@@ -299,3 +301,42 @@ def test_no_service_menu_without_kiosk_setup(tmp_path):
         assert state(client)["device"]["can_service"] is False
         r = client.post(P + "/device/service/unlock", json={"pin": "2580"})
         assert r.status_code == 409 and r.json()["error"]["code"] == "unavailable"
+
+
+# ---- restart of the device (⋮ → Restart device…): the same rules as turning off ----
+def test_reboot_rules():
+    h = harness()
+    h.engine.device.can_reboot = True
+    h.ready_inspection()
+    sid = h.press()
+    refused(lambda: h.engine.begin_power_off("reboot"), "scanning")
+    h.release(sid)
+    refused(lambda: h.engine.begin_power_off("reboot"), "analyzing")
+    h.close(sid)
+    h.finalize(sid, emitted=0, targets=0)
+    assert h.engine.begin_power_off("reboot") is True
+    assert h.engine.begin_power_off("off") is False                   # one action at a time
+    d = h.engine.snapshot()["device"]
+    assert d["powering_off"] and d["power_action"] == "reboot"
+    assert len(h.repo.audit_events("reboot_requested")) == 1
+    h.engine.power_off_failed("Could not restart: denied")
+    assert h.engine.snapshot()["device"]["power_action"] is None
+
+
+def test_reboot_needs_a_command():
+    h = Harness()
+    h.engine.device = RosDevice(lambda: None, power_off_command=["true"])
+    refused(lambda: h.engine.begin_power_off("reboot"), "unavailable")
+    assert run_power_off(["false"], "restart")[1].startswith("Could not restart")
+    assert RosDevice(lambda: None, reboot_command=["true"]).reboot() == (True, "Restarting")
+
+
+def test_reboot_over_http(app_parts):
+    client, engine, mock = app_parts
+    ready(client)
+    assert state(client)["device"]["can_reboot"] is True
+    r = client.post(P + "/device/reboot")
+    assert r.status_code == 200 and r.json() == {"powering_off": True, "action": "reboot"}
+    assert client.post(P + "/device/reboot").status_code == 200
+    assert client.post(P + "/device/power-off").status_code == 200
+    assert (mock.reboot_requests, mock.power_off_requests) == (1, 0)      # ran once, nothing else

@@ -57,6 +57,7 @@ class MockRos:
         self.loop: asyncio.AbstractEventLoop | None = None
         self.calibrate_s = 2.0                  # calibration_node's default stillness window
         self.power_off_requests = 0             # the mock never turns anything off
+        self.reboot_requests = 0
 
     # ---- timing ----
     async def sleep(self, seconds: float) -> None:
@@ -105,6 +106,7 @@ class MockRos:
     # ---- device actions (device.py interface; called on a worker thread) ----
     can_calibrate = True
     can_power_off = True
+    can_reboot = True
 
     def calibrate(self) -> tuple[bool, str]:
         if self.loop is None:
@@ -123,6 +125,10 @@ class MockRos:
                               message="calibration failed: device never still long enough")
         else:
             self.set_hardware(calibrating=False, calibrated=True, message="gyro calibrated")
+
+    def reboot(self) -> tuple[bool, str]:
+        self.reboot_requests += 1
+        return True, "Restarting (mock: nothing is restarted)"
 
     def power_off(self) -> tuple[bool, str]:
         self.power_off_requests += 1

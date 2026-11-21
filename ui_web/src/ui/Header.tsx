@@ -30,7 +30,8 @@ export function alertItems(snap: Snapshot): AlertItem[] {
 export function Header({ snap, connected, run }: { snap: Snapshot; connected: boolean; run?: Run }) {
   const [open, setOpen] = useState(false);
   const items = alertItems(snap);
-  const pill = snap.device.powering_off ? { label: "TURNING OFF", tone: "warn" as Tone }
+  const pill = snap.device.powering_off
+    ? { label: snap.device.power_action === "reboot" ? "RESTARTING" : "TURNING OFF", tone: "warn" as Tone }
     : snap.device.switching ? { label: "SERVICE", tone: "warn" as Tone }
     : connected ? SCREEN_PILL[snap.screen] : { label: "OFFLINE", tone: "bad" as Tone };
   return (

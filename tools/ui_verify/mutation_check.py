@@ -136,6 +136,8 @@ MUTATIONS = [
      '    return {"name": name, "value_mm": raw_value_m, "unit": "mm", "status": "pending",'),
     ("Detector ready as soon as the graph shows it (first frames lost on the Pi) [6]", "detector_supervisor.py",
      "settled = ok and now - ok_since >= self.settle_s", "settled = ok"),
+    ("Restart device runs the power-off command [device]", "api.py",
+     'run = engine.device.power_off if action == "off" else engine.device.reboot', "run = engine.device.power_off"),
     # developer service menu (device.py: PIN, kiosk requests)
     ("Any PIN opens the service menu [service]", "device.py",
      "if not isinstance(pin, str) or not hmac.compare_digest(pin.encode(), expected.encode()):", "if False:"),

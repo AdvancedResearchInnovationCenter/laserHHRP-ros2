@@ -535,6 +535,19 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         check(api.state()["device"]["powering_off"] and "⋮" not in b.text(), "turning off: own screen, no menu")
         api.call("POST", "/dev/mock/power-on")
         b.wait_text("Hold the switch to scan")
+        b.tap("⋮")
+        b.tap("Restart device…")
+        b.wait_text("Restart the device?")
+        layout_ok(b, "restart device (confirm)")
+        b.tap("Restart device")
+        b.wait_text("Restarting the device")
+        layout_ok(b, "restarting the device")
+        b.shot(out, "19g2-restarting-device")
+        d = api.state()["device"]
+        check(d["powering_off"] and d["power_action"] == "reboot" and "RESTARTING" in b.text(),
+              "restart device: own screen, RESTARTING, the backend restarts (not turns off)")
+        api.call("POST", "/dev/mock/power-on")
+        b.wait_text("Hold the switch to scan")
 
         # ---- 12d Service menu (PIN 2580 with the mock): network, restart of the scanner software ----
         b.tap("⋮")

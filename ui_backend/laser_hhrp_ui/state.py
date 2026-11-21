@@ -70,6 +70,7 @@ class Engine:
         self.detector_control = detector_control or NullDetectorControl()
         self.device = NoDevice()                  # calibration / power off (device.py), set by the server
         self.powering_off = False                 # the operator turned the device off: nothing else is accepted
+        self.power_action = "off"                 # "off" or "reboot": what powering_off is doing
         self.service = None                       # developer service menu (device.Service), set by the server
         self.switching: str | None = None         # "desktop" / "restart" requested from the service menu
         self.warn_after_s, self.fail_after_s = warn_after_s, fail_after_s
@@ -303,7 +304,8 @@ class Engine:
 
     def device_view(self) -> dict:
         return {"can_calibrate": bool(self.device.can_calibrate), "can_power_off": bool(self.device.can_power_off),
-                "powering_off": self.powering_off,
+                "powering_off": self.powering_off, "power_action": self.power_action if self.powering_off else None,
+                "can_reboot": bool(getattr(self.device, "can_reboot", False)),
                 "can_service": bool(self.service is not None and self.service.available), "switching": self.switching}
 
     # ------------------------------------------------------------------ emit helpers
@@ -1008,10 +1010,13 @@ class Engine:
             raise CommandError(409, "calibration_refused", message or "Calibration did not start")
         return {"started": True, "message": message}
 
-    def begin_power_off(self) -> bool:
-        """True: the caller runs the power-off command now. False: already turning off (a repeated tap)."""
-        if not self.device.can_power_off:
+    def begin_power_off(self, action: str = "off") -> bool:
+        """Turn off or restart the device. True: the caller runs the command now. False: already turning off or
+        restarting (a repeated tap)."""
+        if action == "off" and not self.device.can_power_off:
             raise CommandError(409, "unavailable", "Turning off is not enabled on this device")
+        if action == "reboot" and not getattr(self.device, "can_reboot", False):
+            raise CommandError(409, "unavailable", "Restarting is not enabled on this device")
         if self.powering_off:
             return False
         if self._acquiring():
@@ -1019,7 +1024,8 @@ class Engine:
         if self.repo.scans_where("analysis = 'pending'"):
             raise CommandError(409, "analyzing", "Wait until the analysis has finished")
         self.powering_off = True
-        self._audit("power_off_requested", actor=self._actor())
+        self.power_action = action
+        self._audit("power_off_requested" if action == "off" else "reboot_requested", actor=self._actor())
         self._emit_system()
         return True
 

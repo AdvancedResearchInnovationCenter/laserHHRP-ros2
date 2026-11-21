@@ -9,7 +9,8 @@ close. GDM autologin starts the session `hhrp-kiosk`, which runs
 | backend (`laser_hhrp_ui` server, port 8080, `--power-off-command "systemctl poweroff"`) | started again if it exits; it starts the detector |
 | screen: Chromium full screen under [cage](https://github.com/cage-kiosk/cage) | opened again if it exits; shows *Starting the scanner…* until the backend answers |
 
-The operator turns the device off with **⋮ → Turn off… → Turn off** in the header (deliberately not one tap). The
+The operator turns the device off with **⋮ → Turn off… → Turn off** in the header (deliberately not one tap), and
+restarts it with **⋮ → Restart device… → Restart device**. The
 ⋮ menu is shown only while no scan runs or is being analysed, and the backend refuses it then as well. The gyro
 is calibrated from the screens (*Calibrate* / *Calibrate gyro*).
 
@@ -38,6 +39,10 @@ sudo ./install.sh --undo   # back to the Ubuntu desktop (its autostart runs star
 Maintenance: SSH as before, or desktop mode. `Ctrl+Alt+F3` gives a text console on the device. The session holds
 the same lock as `start_hardware.sh` / `start_simulation.sh` (released in desktop mode). `install.sh` turns off the
 old GNOME autostart of `start_hardware.sh`, so desktop mode does not start the scanner software by itself.
+
+**Wi-Fi watchdog.** On 2026-11-21 the Pi repeatedly came up associated with an address but unreachable until the
+Wi-Fi was reconnected by hand. The session pings the router every 20 s, logs every change (`network:` lines in
+`session.log`, with power save and the access point) and reconnects when the router stops answering.
 
 Logs: `~/aric_ws/operator_ui/logs/kiosk/` (`session.log`, `core.log`, `backend.log`, `browser.log`).
 `session.log` shows the display card used and whether the session may power off (`CanPowerOff` must be `yes`).

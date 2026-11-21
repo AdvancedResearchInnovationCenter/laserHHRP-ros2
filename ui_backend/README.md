@@ -125,6 +125,7 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
 | `PATCH /api/v1/inspections/{uuid}/next-expected-count` | `{count}` | 1..500, only on Ready / Not ready |
 | `POST /api/v1/detector/restart` | | explicit recovery after a detector crash or failed start |
 | `POST /api/v1/device/calibrate` | | gyro calibration (`calibration/start`); 409 during a scan, while one runs, without current hardware status; the outcome comes in `hardware.calibrating` / `hardware.message` |
+| `POST /api/v1/device/reboot` | | runs `--reboot-command` (e.g. `systemctl reboot`); the same rules as power off; `device.power_action` = `reboot` |
 | `POST /api/v1/device/service/unlock` | `{pin}` | developers' service menu (kiosk: `--service-pin-file`, `--kiosk-control`): checks the PIN (403 wrong, 429 after 5 wrong for 60 s), returns `{network}` |
 | `POST /api/v1/device/service/{desktop\|restart}` | `{pin}` | writes the request for the kiosk session (`deploy/kiosk`); 409 during a scan or a pending analysis; `device.switching` until the backend stops |
 | `POST /api/v1/device/power-off` | | runs `--power-off-command` (e.g. `systemctl poweroff`); 409 during a scan or a pending analysis or when not configured; `device.powering_off` until the system stops the backend; a repeated call runs nothing |

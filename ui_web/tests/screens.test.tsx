@@ -209,15 +209,18 @@ export const tests: Test[] = [
     }
     for (const screen of ["scanning", "finishing_analysis", "results", "analysis_failed"] as const)
       assert.ok(!has(html(snapshot({ screen, current_scan: scan() }))), `no menu on ${screen}`);
-    const none = { can_calibrate: true, can_power_off: false, powering_off: false, can_service: false, switching: null };
+    const none = { can_calibrate: true, can_power_off: false, powering_off: false, can_reboot: false, power_action: null,
+                   can_service: false, switching: null };
     assert.ok(!has(html(snapshot({ device: none }))), "no menu without power off or service");
     assert.ok(has(html(snapshot({ device: { ...none, can_service: true } }))), "menu for the service menu alone");
+    assert.ok(has(html(snapshot({ device: { ...none, can_reboot: true } }))), "menu for Restart device alone");
     assert.ok(!has(html(snapshot(), false)), "not offered while disconnected");
   }],
   ["leaving: turning off, desktop mode and restart each have their own screen, kept when the backend goes", () => {
     const base = snapshot().device;
     const cases = [
-      [{ ...base, powering_off: true }, "Turning off", "TURNING OFF"],
+      [{ ...base, powering_off: true, power_action: "off" as const }, "Turning off", "TURNING OFF"],
+      [{ ...base, powering_off: true, power_action: "reboot" as const }, "Restarting the device", "RESTARTING"],
       [{ ...base, switching: "desktop" as const }, "Opening the desktop", "SERVICE"],
       [{ ...base, switching: "restart" as const }, "Restarting the scanner software", "SERVICE"],
     ] as const;

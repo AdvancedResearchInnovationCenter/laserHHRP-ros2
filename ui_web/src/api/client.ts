@@ -41,6 +41,7 @@ export const api = {
   // the backend refuses both during a scan (and power off while an analysis is pending)
   calibrate: () => call<{ started: boolean; message: string }>("POST", "/device/calibrate"),
   powerOff: () => call<{ powering_off: boolean }>("POST", "/device/power-off"),
+  reboot: () => call<{ powering_off: boolean }>("POST", "/device/reboot"),
   // developer service menu: every call carries the PIN
   serviceUnlock: (pin: string) => call<{ network: NetworkDevice[] }>("POST", "/device/service/unlock", { pin }),
   service: (kind: "desktop" | "restart", pin: string) => call<{ switching: string }>("POST", `/device/service/${kind}`, { pin }),

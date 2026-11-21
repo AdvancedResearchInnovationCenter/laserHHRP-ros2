@@ -70,6 +70,7 @@ start_stack() {  # each in its own process group (setsid), so stop_stack reaches
   echo $! > "$CTL/core.pid"
   setsid bash -c 'keep "$@"' _ backend "$WS/install/laser_hhrp_ui/lib/laser_hhrp_ui/server" --port 8080 \
     --static "$WS/src/laserHHRP-ros2/ui_web/dist" --power-off-command "systemctl poweroff" \
+    --reboot-command "systemctl reboot" \
     --service-pin-file "$PIN" --kiosk-control "$CTL" 9>&- &
   echo $! > "$CTL/backend.pid"
 }
@@ -100,6 +101,32 @@ watch_requests() {  # restart is done here; desktop ends the screen, the main lo
   done
 }
 
+wifi_watch() {  # Every boot on 2026-11-21 the Wi-Fi associated and got its address, yet nothing reached the Pi
+                # until a manual reconnect. Every 20 s: does the router answer? Changes are logged with the Wi-Fi
+                # state; when it stops answering, reconnect (allowed from this, the active session).
+  local gw dev con state last=""
+  while sleep 20; do
+    read -r gw dev < <(ip -4 route show default 2>/dev/null | awk '{print $3, $5; exit}')
+    if [ -z "${gw:-}" ]; then state="no default route"
+    elif ping -c 3 -W 2 -I "$dev" "$gw" >/dev/null 2>&1; then state="router $gw answers on $dev"
+    else state="router $gw NOT answering on $dev"
+    fi
+    if [ "$state" != "$last" ]; then
+      echo "$(date -Is) network: $state ($(iw dev "${dev:-wlan0}" get power_save 2>&1 | tr -d '\t'); $(iw dev "${dev:-wlan0}" link 2>&1 | grep -E 'SSID|freq' | tr -d '\t' | tr '\n' ' '))"
+      last="$state"
+    fi
+    case "$state" in *NOT*)
+      con="$(nmcli -t -g GENERAL.CONNECTION device show "$dev" 2>/dev/null)"
+      if [ -n "$con" ] && nmcli connection up "$con" >/dev/null 2>&1; then
+        echo "$(date -Is) network: reconnected $con"
+      else
+        echo "$(date -Is) network: reconnecting ${con:-$dev} failed"
+      fi
+      last=""; sleep 30 ;;
+    esac
+  done
+}
+
 desktop() {  # the Ubuntu desktop as in ubuntu-wayland.desktop, until the developer logs out. GNOME's Log Out
              # ends the whole login session: GDM's timed login (install.sh) then starts the kiosk again.
   echo "$(date -Is) desktop mode"
@@ -115,6 +142,7 @@ trap 'echo "$(date -Is) session ending"; echo desktop > "$CTL/request"
 
 start_stack
 watch_requests &            # keeps descriptor 9: a restart takes the lock again
+wifi_watch 9>&- &
 while :; do
   if [ "$(cat "$CTL/request" 2>/dev/null)" = desktop ]; then
     rm -f "$CTL/request"

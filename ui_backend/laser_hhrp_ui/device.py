@@ -20,6 +20,7 @@ class NoDevice:
     """Neither action available (no ROS, or API-only runs)."""
     can_calibrate = False
     can_power_off = False
+    can_reboot = False
 
     def calibrate(self) -> tuple[bool, str]:
         return False, "Calibration is not available here"
@@ -27,20 +28,23 @@ class NoDevice:
     def power_off(self) -> tuple[bool, str]:
         return False, "Turning off is not enabled on this device"
 
+    def reboot(self) -> tuple[bool, str]:
+        return False, "Restarting is not enabled on this device"
 
-def run_power_off(command: list[str] | None) -> tuple[bool, str]:
+
+def run_power_off(command: list[str] | None, what: str = "turn off") -> tuple[bool, str]:
     """The configured command (e.g. `systemctl poweroff`). It returns once the shutdown is queued; the
     system then stops the backend, the core and the detector with SIGTERM."""
     if not command:
-        return NoDevice().power_off()
+        return NoDevice().power_off() if what == "turn off" else NoDevice().reboot()
     try:
         p = subprocess.run(command, capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"Could not turn off: {e}"
+        return False, f"Could not {what}: {e}"
     if p.returncode != 0:
         detail = (p.stderr or p.stdout).strip().splitlines()
-        return False, "Could not turn off: " + (detail[-1] if detail else f"exit code {p.returncode}")
-    return True, "Turning off"
+        return False, f"Could not {what}: " + (detail[-1] if detail else f"exit code {p.returncode}")
+    return True, "Turning off" if what == "turn off" else "Restarting"
 
 
 class RosDevice:
@@ -48,9 +52,11 @@ class RosDevice:
     bridge's node (its executor thread delivers the reply); power off through `power_off_command`."""
     can_calibrate = True
 
-    def __init__(self, node_getter, power_off_command: list[str] | None = None, timeout_s: float = 5.0):
+    def __init__(self, node_getter, power_off_command: list[str] | None = None, timeout_s: float = 5.0,
+                 reboot_command: list[str] | None = None):
         self.node_getter = node_getter
         self.power_off_command = list(power_off_command) if power_off_command else None
+        self.reboot_command = list(reboot_command) if reboot_command else None
         self.timeout_s = timeout_s
         self._client = None
         self._lock = threading.Lock()
@@ -58,6 +64,10 @@ class RosDevice:
     @property
     def can_power_off(self) -> bool:
         return bool(self.power_off_command)
+
+    @property
+    def can_reboot(self) -> bool:
+        return bool(self.reboot_command)
 
     def calibrate(self) -> tuple[bool, str]:
         node = self.node_getter()
@@ -81,6 +91,9 @@ class RosDevice:
 
     def power_off(self) -> tuple[bool, str]:
         return run_power_off(self.power_off_command)
+
+    def reboot(self) -> tuple[bool, str]:
+        return run_power_off(self.reboot_command, "restart")
 
 
 # ---- service menu (developers): PIN, network information, kiosk requests ----

@@ -177,20 +177,28 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         started, message = await asyncio.get_running_loop().run_in_executor(None, engine.device.calibrate)
         return await _run(engine.record_calibration, started, message)
 
-    @app.post(P + "/device/power-off")
-    async def power_off():
+    async def _power(action: str):
         try:
-            first = engine.begin_power_off()
+            first = engine.begin_power_off(action)
         except CommandError as e:
             return _error(e.status, e.code, e.message, e.field)
         if first:
-            ok, message = await asyncio.get_running_loop().run_in_executor(None, engine.device.power_off)
+            run = engine.device.power_off if action == "off" else engine.device.reboot
+            ok, message = await asyncio.get_running_loop().run_in_executor(None, run)
             if not ok:
-                log.error("power off failed: %s", message)
+                log.error("%s failed: %s", action, message)
                 engine.power_off_failed(message)
                 return _error(500, "power_off_failed", message)
-            log.warning("power off requested by the operator")
-        return {"powering_off": True}
+            log.warning("%s requested by the operator", "power off" if action == "off" else "reboot")
+        return {"powering_off": True, "action": action}
+
+    @app.post(P + "/device/power-off")
+    async def power_off():
+        return await _power("off")
+
+    @app.post(P + "/device/reboot")
+    async def reboot():
+        return await _power("reboot")
 
     # ---- service menu (developers, PIN): network view, desktop mode, restart of the scanner software ----
     async def _service(request: Request):
@@ -332,6 +340,7 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         async def mock_power_on():
             """The mock turns nothing off: end its 'turning off' so a check can go on."""
             engine.powering_off = False
+            engine.power_action = "off"
             engine.switching = None
             engine._emit_system()
             return engine.device_view()

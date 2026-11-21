@@ -46,7 +46,8 @@ class _SupervisorService:
 def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_dir=None,
           warn_after_s: float = 10.0, fail_after_s: float = 120.0, clock: Clock | None = None,
           ros: bool = False, data_root: str | Path | None = None, usb_roots=None, usb=None,
-          power_off_command: list[str] | None = None, service_pin_file=None, kiosk_control=None):
+          power_off_command: list[str] | None = None, service_pin_file=None, kiosk_control=None,
+          reboot_command: list[str] | None = None):
     """Wire repository, engine, hub, ingress, the event source (mock or ROS) and the app (also for tests).
     `power_off_command`: what the screen's Turn off runs (live ROS only; none = the button is not offered).
     `service_pin_file` + `kiosk_control`: the developer service menu (kiosk only; both needed)."""
@@ -73,7 +74,7 @@ def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_di
                                         out_root=root / "detector-output", log_dir=root / "logs")
         engine.detector_control = supervisor
         from .device import RosDevice
-        engine.device = RosDevice(lambda: bridge.node, power_off_command)
+        engine.device = RosDevice(lambda: bridge.node, power_off_command, reboot_command=reboot_command)
         services = [bridge, _SupervisorService(supervisor)]   # stop order: supervisor, then bridge
     if mock:
         from .device import KioskControl, Service, ServiceAccess
@@ -109,6 +110,8 @@ def main(argv=None) -> None:
                     help="allowed mount root for USB export (repeatable; default: /media and /run/media)")
     ap.add_argument("--power-off-command", default=None,
                     help="command run by the screen's Turn off, e.g. 'systemctl poweroff' (default: no Turn off)")
+    ap.add_argument("--reboot-command", default=None,
+                    help="command run by the screen's Restart device, e.g. 'systemctl reboot' (default: not offered)")
     ap.add_argument("--service-pin-file", default=None, help="service menu PIN (4-8 digits in this file)")
     ap.add_argument("--kiosk-control", default=None, help="kiosk session request folder (deploy/kiosk)")
     ap.add_argument("--log-level", default="info")
@@ -120,7 +123,8 @@ def main(argv=None) -> None:
                     warn_after_s=args.analysis_warn_s, fail_after_s=args.analysis_fail_s, ros=ros,
                     data_root=args.data_root, usb_roots=args.usb_root,
                     power_off_command=shlex.split(args.power_off_command) if args.power_off_command else None,
-                    service_pin_file=args.service_pin_file, kiosk_control=args.kiosk_control)
+                    service_pin_file=args.service_pin_file, kiosk_control=args.kiosk_control,
+                    reboot_command=shlex.split(args.reboot_command) if args.reboot_command else None)
     logging.getLogger("laser_hhrp_ui").info("database %s, static %s, source %s", args.db, static,
                                             "mock" if args.mock else "ros" if ros else "none")
     import uvicorn

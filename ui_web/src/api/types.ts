@@ -71,6 +71,7 @@ export interface Snapshot {
   // operator device actions (backend device.py): which are offered, and whether the device is turning off
   device: {
     can_calibrate: boolean; can_power_off: boolean; powering_off: boolean;
+    can_reboot: boolean; power_action: "off" | "reboot" | null;       // powering_off: turning off or restarting
     can_service: boolean; switching: "desktop" | "restart" | null;    // developer service menu (PIN)
   };
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];

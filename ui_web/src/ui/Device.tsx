@@ -16,10 +16,10 @@ export const POWER_OFF_SCREENS: readonly Screen[] = ["identify", "setup", "ready
 export function offerMenu(snap: Snapshot, connected: boolean): boolean {
   const d = snap.device;
   return connected && !d.powering_off && !d.switching && POWER_OFF_SCREENS.includes(snap.screen)
-    && (d.can_power_off || d.can_service);
+    && (d.can_power_off || d.can_reboot || d.can_service);
 }
 
-type Step = "menu" | "off" | "pin" | "service" | "desktop" | "restart";
+type Step = "menu" | "off" | "reboot" | "pin" | "service" | "desktop" | "restart";
 const PIN_MIN = 4, PIN_MAX = 8;
 
 export function MenuButton({ snap, run }: { snap: Snapshot; run: Run }) {
@@ -42,6 +42,7 @@ export function MenuButton({ snap, run }: { snap: Snapshot; run: Run }) {
       {step === "menu" && (
         <Modal title="Menu" onClose={close}>
           <div className="menu-list">
+            {snap.device.can_reboot && <button className="secondary" onClick={() => setStep("reboot")}>Restart device…</button>}
             {snap.device.can_power_off && <button className="secondary" onClick={() => setStep("off")}>Turn off…</button>}
             {snap.device.can_service && <button className="secondary" onClick={() => setStep("pin")}>Service…</button>}
           </div>
@@ -52,6 +53,12 @@ export function MenuButton({ snap, run }: { snap: Snapshot; run: Run }) {
                  text={<>The scanner shuts down. Inspections and results are kept.<br />
                    <strong>Wait until the screen is dark</strong> before you remove the power.</>}
                  onCancel={close} onConfirm={() => { close(); void run(api.powerOff()); }} />
+      )}
+      {step === "reboot" && (
+        <Confirm title="Restart the device?" confirmLabel="Restart device"
+                 text={<>The scanner restarts and this screen comes back by itself in about a minute.
+                   Inspections and results are kept.</>}
+                 onCancel={close} onConfirm={() => { close(); void run(api.reboot()); }} />
       )}
       {step === "pin" && (
         <Modal title="Service PIN" onClose={close}>
@@ -96,7 +103,9 @@ export function MenuButton({ snap, run }: { snap: Snapshot; run: Run }) {
 
 /** Turning off, opening the desktop or restarting: the backend stops shortly; this stays on screen. */
 export function Leaving({ snap }: { snap: Snapshot }) {
-  const [title, text] = snap.device.powering_off
+  const [title, text] = snap.device.powering_off && snap.device.power_action === "reboot"
+    ? ["Restarting the device…", "This screen comes back by itself in about a minute."]
+    : snap.device.powering_off
     ? ["Turning off…", "Wait until the screen is dark, then remove the power."]
     : snap.device.switching === "desktop"
       ? ["Opening the desktop…", "The scanner software stops. Log out of the desktop to come back here."]
