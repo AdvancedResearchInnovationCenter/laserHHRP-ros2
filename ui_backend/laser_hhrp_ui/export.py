@@ -6,8 +6,9 @@
 
 One row per detected feature; a scan without features still gets one row (feature columns empty), so
 every scan of the inspection, including rescans and failed scans, appears. Measurements are exported
-as recorded: v0.1 has no validated metrology, so `measurement_status` is `not_measured` and the value
-is empty. There is no pass/fail column.
+as recorded by inspection_node: `measurement_status` measured / not_measured (with `measurement_reason`) /
+pending (the scan failed before its measurement), the value in mm, and `measurement_verdict` in_limits /
+out_of_limits against the GO range (`limit_lower_mm` .. `limit_upper_mm`, inclusive) it was judged with.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ COLUMNS = [
     "detected_target_count", "count_mismatch", "analysis", "analysis_error", "frame_count",
     "feature_id", "kind", "is_target", "x_mm", "y_mm", "z_mm", "diameter_mm", "partial", "coverage",
     "scanned_share", "rms_mm", "measurement_name", "measurement_status", "measurement_value_mm",
+    "measurement_verdict", "limit_lower_mm", "limit_upper_mm", "measurement_reason",
 ]
 
 DEFAULT_USB_ROOTS = ("/media", "/run/media")
@@ -73,7 +75,8 @@ def inspection_csv(engine, inspection_uuid: str) -> tuple[str, str]:
                 _num(f["feature_id"]), f["kind"], _bool(f["is_target"]), _num(f["x_mm"]), _num(f["y_mm"]),
                 _num(f["z_mm"]), _num(f["diameter_mm"]), _bool(f["partial"]), _num(q.get("coverage")),
                 _num(q.get("scanned_share")), _num(q.get("rms_mm")), m["name"], m["status"],
-                _num(m["value_mm"]),
+                _num(m["value_mm"]), m.get("verdict") or "", _num(m.get("lower_mm")), _num(m.get("upper_mm")),
+                m.get("reason") or "",
             ])
     return f"{insp['label']}.csv", out.getvalue()
 

@@ -20,6 +20,7 @@
   <depend>rviz_common</depend>
   <depend>pluginlib</depend>
   <depend>qtbase5-dev</depend>
+  <build_depend>eigen</build_depend>          <!-- csk_depth (third_party) -->
 
   <exec_depend>rosidl_default_runtime</exec_depend>
   <exec_depend>rviz2</exec_depend>

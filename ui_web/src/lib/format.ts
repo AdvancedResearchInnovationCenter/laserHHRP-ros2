@@ -1,5 +1,5 @@
 // Display wording only. Status, counts and target filtering come from the backend.
-import type { Mode, Scan, ScanStatus } from "../api/types";
+import type { Measurement, Mode, Scan, ScanStatus } from "../api/types";
 
 export const MODE_LABEL: Record<Mode, string> = { csk_depth: "CSK Depth", rivet_flushness: "Rivet Flushness" };
 export const TARGET_NOUN: Record<Mode, [string, string]> = {
@@ -10,6 +10,42 @@ export const MEASUREMENT_LABEL: Record<string, string> = { csk_depth: "CSK depth
 export const KIND_LABEL: Record<string, string> = { countersink: "Countersink", hole: "Plain hole", rivet: "Rivet head" };
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "neutral";
+
+// The measurement algorithms' reason codes, worded for the operator (MEASUREMENT_INTEGRATION.md).
+export const REASON_TEXT: Record<string, string> = {
+  too_few_points: "Not enough scan data",
+  surface_not_flat: "Surface around it is not flat",
+  unexpected_shape: "Shape not recognised",
+  scan_distorted: "Scan distorted: rescan",
+  partial: "Only partly scanned",
+  failed: "Could not be measured",
+};
+
+export const VERDICT: Record<"in_limits" | "out_of_limits", { label: string; tone: Tone }> = {
+  in_limits: { label: "GO", tone: "ok" },
+  out_of_limits: { label: "NO-GO", tone: "bad" },
+};
+
+/** "1.012 mm" (depth), "+0.067 mm" / "−0.012 mm" (flushness: the sign is the point). */
+export function measurementValue(m: Measurement): string {
+  if (m.status !== "measured" || m.value_mm === null) return "Not measured";
+  const v = m.value_mm;
+  if (m.name !== "flushness") return `${v.toFixed(3)} mm`;
+  return `${v > 0 ? "+" : v < 0 ? "\u2212" : ""}${Math.abs(v).toFixed(3)} mm`;
+}
+
+/** Why a target was not measured, in operator words; null when measured. */
+export function measurementReason(m: Measurement): string | null {
+  if (m.status === "measured") return null;
+  return m.status === "not_measured" ? REASON_TEXT[m.reason ?? "failed"] ?? REASON_TEXT.failed : null;
+}
+
+/** "0.947 – 1.147 mm" for depth, "−0.150 – +0.050 mm" for flushness; null without limits. */
+export function rangeText(m: Measurement): string | null {
+  if (m.lower_mm === null || m.lower_mm === undefined || m.upper_mm === null || m.upper_mm === undefined) return null;
+  const f = (v: number) => measurementValue({ ...m, status: "measured", value_mm: v }).replace(" mm", "");
+  return `${f(m.lower_mm)} \u2013 ${f(m.upper_mm)} mm`;
+}
 
 export const STATUS: Record<ScanStatus, { label: string; tone: Tone }> = {
   accepted: { label: "Accepted", tone: "ok" },

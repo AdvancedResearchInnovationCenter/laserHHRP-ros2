@@ -7,7 +7,18 @@ export type Screen =
 
 export type Mode = "csk_depth" | "rivet_flushness";
 
-export interface Measurement { name: string; value_mm: number | null; unit: string; status: "not_measured" | "measured" | "invalid" }
+// The measurement of a target feature by inspection_node (after the scan's detection finished). `pending`: not
+// (yet) measured, e.g. the scan failed first, or a non-target feature. The verdict is the backend's, against the
+// inclusive GO range the value was judged with.
+export interface Measurement {
+  name: string; value_mm: number | null; unit: string;
+  status: "pending" | "measured" | "not_measured";
+  reason?: string | null;                       // not_measured: algorithm reason code (lib/format REASON_TEXT)
+  verdict?: "in_limits" | "out_of_limits" | null;
+  lower_mm?: number | null; upper_mm?: number | null;
+}
+
+export interface MeasurementCounts { in_limits: number; out_of_limits: number; not_measured: number; pending: number }
 
 export interface Feature {
   feature_id: number; result_seq: number; kind: string; is_target: boolean;
@@ -29,6 +40,7 @@ export interface Scan {
   scan_id: string; scan_number: number | null; display_name: string; inspection_uuid: string | null;
   mode: Mode | null; operator_id: string | null; expected_count: number | null;
   detected_target_count: number; non_target_count: number; partial_target_count: number;
+  measurement?: MeasurementCounts;   // target features by measurement outcome
   count_mismatch: boolean | null; acquisition: string; acquisition_note: string | null;
   analysis: "pending" | "complete" | "failed" | "interrupted"; analysis_error: string | null;
   decision: string | null; decided_by: string | null; decided_at: string | null;

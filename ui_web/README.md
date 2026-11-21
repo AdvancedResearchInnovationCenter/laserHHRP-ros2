@@ -9,7 +9,7 @@ screens, chosen by the backend's `snapshot.screen`:
 | Setup | inspection ID (generated, or typed on the keyboard), CSK Depth or Rivet Flushness (fixed per inspection), change operator, past inspections |
 | Ready / Not ready | READY + "hold the switch", or every backend reason; expected count (keypad, − / +, remembered); restart detector after a detector error; history; end inspection |
 | Scanning / Finishing analysis | distance, detected / expected, count circles filling as results arrive (also after release; > 40 → 40 + remainder; amber = partial, dashed = beyond expected), live map |
-| Results / Analysis failed | SVG map of the scan's local XY (tap a feature for details), count and mismatch warning, *Not measured*; Accept / Rescan, or after a failure Retry (only if it can run) / Rescan / Keep incomplete (confirmed) |
+| Results / Analysis failed | SVG map of the scan's local XY (tap a feature for details), count and mismatch warning, GO / NO-GO / not-measured counts (targets coloured on the map; a feature shows its CSK depth or signed flushness, verdict and GO range, or why it was not measured); Accept / Rescan, or after a failure Retry (only if it can run) / Rescan / Keep incomplete (confirmed) |
 | History | the inspection's scans newest first with status (incl. Undecided, failed, incomplete); reopen any scan; decide undecided / failed ones; CSV download and USB export |
 
 Header: state pill, inspection, *Time not verified*, operator, a ⚠ button listing alerts and warnings, the

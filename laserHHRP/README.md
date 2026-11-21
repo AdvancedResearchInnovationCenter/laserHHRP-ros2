@@ -100,7 +100,7 @@ Handheld"). They only talk through topics and services.
 | `odometry_node.cpp` | 2 data acquisition | Pose of the device from IMU + encoder (`base/pose`), roller slip detection, laser pose for the synchronizer |
 | `synchronizer_node.cpp` | 3 synchronization | One `ScanFrame` per profile: position along the scan axis, IMU and pose at the same instant; hardware or software sync |
 | `point_cloud_node.cpp` | 4 point cloud | **To be developed.** Now merges frames into a simple cloud (`scan/cloud`, `scan/cloud_view`) |
-| `inspection_node.cpp` | 5 inspection | **To be developed.** Receives the cloud, will publish `inspection/result` |
+| `inspection_node.cpp` | 5 inspection | CSK depth / rivet flushness per scan (algorithms in `third_party/`, git submodules), after the detector's `inspection/detection_finalized`; publishes `inspection/measurement` |
 | `recorder_node.cpp` | 6 storage | One folder per scan: `frames.bin`, `results.json`, `session.json`; free disk space |
 | `calibration_node.cpp` | calibration | Gyro calibration and the extrinsic (rolling) calibration; loads/saves the calibration file |
 | `scan_controller_node.cpp` | 7 + monitoring | Scan state and the operator services; monitoring rules (a fatal fault stops the scan); `scan/status` for the UI |

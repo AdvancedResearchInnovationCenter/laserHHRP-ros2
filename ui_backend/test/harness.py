@@ -5,12 +5,14 @@ from __future__ import annotations
 import uuid
 
 from laser_hhrp_ui.clock import FakeClock
-from laser_hhrp_ui.events import (DetectionFinalized, DetectorStatus, HardwareStatus, ScanTransition,
-                                  StreamClosed, TaggedResult)
+from laser_hhrp_ui.events import (DetectionFinalized, DetectorStatus, HardwareStatus, MeasuredValue,
+                                  MeasurementFinalized, ScanTransition, StreamClosed, TaggedResult)
 from laser_hhrp_ui.repository import Repository
 from laser_hhrp_ui.state import Engine
 
 TARGET = {"csk_depth": "countersink", "rivet_flushness": "rivet"}
+# hhrp.yaml GO ranges (m), the quantity, and a value inside the range
+LIMITS = {"csk_depth": ("csk_depth", 0.000947, 0.001147, 0.001), "rivet_flushness": ("flushness", -0.00015, 0.00005, 0.0)}
 
 
 class FakeDetectorControl:
@@ -38,6 +40,7 @@ class Harness:
         self.engine = Engine(self.repo, self.clock, emit=self._emit, detector_control=self.det, source=source)
         self.ctrl, self.seq = "ctrl-1", 0
         self.next_seq = {}
+        self.sent = {}                     # scan_id -> {feature_id: (is_target, partial)} as the detector reported
 
     def _emit(self, type_, payload, scan_id=None, inspection_id=None):
         self.events.append((type_, payload, scan_id))
@@ -92,6 +95,8 @@ class Harness:
         detail.update({"d_top_mm": 9.5, "ring_coverage": 0.9} if kind != "rivet"
                       else {"d_head_mm": 5.6, "height_mm": 0.02, "edge_coverage": 0.9})
         self.handle(TaggedResult(scan_id, seq, mode, fid, kind, (0.012, y / 1000, 0.0), detail))
+        if mode == (self.repo.scan(scan_id) or {}).get("mode", mode):      # another mode's result is never measured
+            self.sent.setdefault(scan_id, {})[fid] = (kind == TARGET[mode], partial)
         return seq
 
     def results(self, scan_id, n, kind=None):
@@ -101,7 +106,9 @@ class Harness:
     def close(self, scan_id, frames=500, stop_state="IDLE"):
         self.handle(StreamClosed(scan_id, frames, stop_state))
 
-    def finalize(self, scan_id, frames=500, emitted=None, targets=None, success=True, mode=None, error=""):
+    def finalize(self, scan_id, frames=500, emitted=None, targets=None, success=True, mode=None, error="",
+                 measure=True):
+        """The detector's finalization and, unless measure=False (or it failed), inspection_node's measurement."""
         scan = self.repo.scan(scan_id)
         mode = mode or scan["mode"]
         if emitted is None:
@@ -109,6 +116,24 @@ class Harness:
         if targets is None:
             targets = self.repo.feature_counts(scan_id)["targets"]
         self.handle(DetectionFinalized(scan_id, mode, frames, emitted, targets, success, error))
+        if measure and success:
+            self.measure(scan_id, mode=mode)
+
+    def measure(self, scan_id, values=None, mode=None, success=True, error="", features=None):
+        """MeasurementFinalized for the targets the detector reported: every one measured in limits, partial ones
+        not measured; `values` {feature_id: value_m or reason str} overrides; `features` replaces the list."""
+        mode = mode or (self.repo.scan(scan_id) or {}).get("mode") or "csk_depth"
+        quantity, lo, hi, nominal = LIMITS[mode]
+        if features is None:
+            features = []
+            for fid, (target, partial) in sorted(self.sent.get(scan_id, {}).items()):
+                if not target:
+                    continue
+                v = (values or {}).get(fid, "partial" if partial else nominal)
+                features.append(MeasuredValue(fid, False, 0.0, v) if isinstance(v, str) else MeasuredValue(fid, True, v))
+        e = MeasurementFinalized(scan_id, mode, quantity, lo, hi, tuple(features) if success else (), success, error)
+        self.handle(e)
+        return e
 
     def complete_scan(self, n=20, kind=None, frames=500):
         """Press, n detections (half after release), release, close, finalize."""

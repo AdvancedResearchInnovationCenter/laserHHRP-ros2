@@ -3,11 +3,14 @@
 
 #include <cmath>
 #include <cstdio>
+#include <fstream>
+#include <sstream>
 
 #include "laser_hhrp/calibration_data.hpp"
 #include "laser_hhrp/clock_sync.hpp"
 #include "laser_hhrp/frame_pairer.hpp"
 #include "laser_hhrp/gyro_calibrator.hpp"
+#include "laser_hhrp/measurement_input.hpp"
 #include "laser_hhrp/monitor_rules.hpp"
 #include "laser_hhrp/scanner_clock.hpp"
 #include "laser_hhrp/serial_protocol.hpp"
@@ -161,4 +164,95 @@ TEST(MonitorRules, SpeedAndDevices) {
   in.laser_ok = false;
   f = evaluate(in);
   EXPECT_EQ(f[0].severity, Severity::FATAL);
+}
+
+// ---- measurement inputs (inspection_node) --------------------------------------------------------
+
+TEST(MeasurementInput, HoleSummaryTargetsAreTheCountersinks) {
+  std::istringstream in(
+      "id,cx_mm,cy_mm,cz_mm,top_diam_mm,fit_rms_mm,ring_coverage,countersunk,partial,scanned_share,dist_to_prev_mm\n"
+      "1,0.459,-13.512,63.207,8.864,0.047,1.00,True,False,1.00,\n"
+      "2,1.122,-34.186,63.169,4.542,0.151,1.00,False,False,1.00,20.685\n"
+      "3,1.5,-54.0,63.1,8.9,0.05,0.80,True,True,0.60,20.1\r\n");
+  std::vector<SummaryRow> rows;
+  std::string error;
+  ASSERT_TRUE(parse_summary(in, MeasureKind::CskDepth, rows, error)) << error;
+  ASSERT_EQ(rows.size(), 3u);
+  EXPECT_EQ(rows[0].id, 1u);
+  EXPECT_NEAR(rows[0].centre_m[1], -0.013512, 1e-12);
+  EXPECT_NEAR(rows[0].diameter_m, 0.008864, 1e-12);
+  EXPECT_TRUE(rows[0].target);
+  EXPECT_FALSE(rows[1].target);   // plain hole: not measured
+  EXPECT_TRUE(rows[2].target);
+  EXPECT_TRUE(rows[2].partial);
+}
+
+TEST(MeasurementInput, RivetSummaryEveryRivetIsATarget) {
+  std::istringstream in(
+      "id,cx_mm,cy_mm,cz_mm,head_diam_mm,head_height_mm,fit_rms_mm,edge_coverage,partial,scanned_share,dist_to_nearest_mm\n"
+      "7,-4.28,8.99,64.75,8.81,0.02,0.01,0.95,False,1.00,20.0\n");
+  std::vector<SummaryRow> rows;
+  std::string error;
+  ASSERT_TRUE(parse_summary(in, MeasureKind::RivetFlushness, rows, error)) << error;
+  ASSERT_EQ(rows.size(), 1u);
+  EXPECT_EQ(rows[0].id, 7u);
+  EXPECT_TRUE(rows[0].target);
+  EXPECT_NEAR(rows[0].diameter_m, 0.00881, 1e-12);
+  EXPECT_EQ(feature_pcd_name(MeasureKind::RivetFlushness, 7), "rivet_07.pcd");
+  EXPECT_EQ(feature_pcd_name(MeasureKind::CskDepth, 123), "hole_123.pcd");
+}
+
+TEST(MeasurementInput, BadSummariesAreRefusedNotGuessed) {
+  std::vector<SummaryRow> rows;
+  std::string error;
+  std::istringstream missing("id,cx_mm,cy_mm,cz_mm,top_diam_mm,partial\n1,0,0,0,8,False\n");  // no countersunk
+  EXPECT_FALSE(parse_summary(missing, MeasureKind::CskDepth, rows, error));
+  EXPECT_NE(error.find("countersunk"), std::string::npos);
+  std::istringstream bad("id,cx_mm,cy_mm,cz_mm,head_diam_mm,partial\n1,0,x,0,8,False\n");
+  EXPECT_FALSE(parse_summary(bad, MeasureKind::RivetFlushness, rows, error));
+  std::istringstream twice("id,cx_mm,cy_mm,cz_mm,head_diam_mm,partial\n1,0,0,0,8,False\n1,0,0,0,8,False\n");
+  EXPECT_FALSE(parse_summary(twice, MeasureKind::RivetFlushness, rows, error));
+  std::istringstream empty("");
+  EXPECT_FALSE(parse_summary(empty, MeasureKind::RivetFlushness, rows, error));
+  std::istringstream header_only("id,cx_mm,cy_mm,cz_mm,head_diam_mm,partial\n");
+  EXPECT_TRUE(parse_summary(header_only, MeasureKind::RivetFlushness, rows, error));  // a scan with no rivet
+  EXPECT_TRUE(rows.empty());
+}
+
+TEST(MeasurementInput, PcdBinaryRoundTripAndTruncation) {
+  const std::string path = ::testing::TempDir() + "measurement_input_test.pcd";
+  const float pts[6] = {0.001f, 0.002f, 0.063f, -0.004f, 0.005f, 0.0625f};
+  {
+    std::ofstream f(path, std::ios::binary);
+    f << "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 2\nHEIGHT 1\n"
+         "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 2\nDATA binary\n";
+    f.write(reinterpret_cast<const char*>(pts), sizeof pts);
+  }
+  std::vector<float> xyz;
+  std::string error;
+  ASSERT_TRUE(read_pcd_xyz(path, xyz, error)) << error;
+  ASSERT_EQ(xyz.size(), 6u);
+  for (int i = 0; i < 6; ++i) EXPECT_EQ(xyz[i], pts[i]);
+  {
+    std::ofstream f(path, std::ios::binary);
+    f << "VERSION 0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nPOINTS 3\nDATA binary\n";
+    f.write(reinterpret_cast<const char*>(pts), sizeof pts);   // one point short
+  }
+  EXPECT_FALSE(read_pcd_xyz(path, xyz, error));
+  {
+    std::ofstream f(path, std::ios::binary);
+    f << "VERSION 0.7\nFIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nPOINTS 0\nDATA binary\n";
+  }
+  EXPECT_FALSE(read_pcd_xyz(path, xyz, error));
+  EXPECT_FALSE(read_pcd_xyz(path + ".missing", xyz, error));
+  std::remove(path.c_str());
+}
+
+TEST(MeasurementInput, LimitsAreInclusive) {
+  EXPECT_TRUE(within_limits(0.000947, 0.000947, 0.001147));
+  EXPECT_TRUE(within_limits(0.001147, 0.000947, 0.001147));
+  EXPECT_FALSE(within_limits(0.0011471, 0.000947, 0.001147));
+  EXPECT_TRUE(within_limits(-0.00015, -0.00015, 0.00005));
+  EXPECT_FALSE(within_limits(0.00006, -0.00015, 0.00005));
+  EXPECT_FALSE(within_limits(std::nan(""), -1, 1));
 }

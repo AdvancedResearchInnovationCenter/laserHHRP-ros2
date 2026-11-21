@@ -116,15 +116,49 @@ export const tests: Test[] = [
                         current_scan: scan({ ...failed, replay_eligible: true, retry_available: true }) }));
     assert.ok(buttons(m).includes("Retry analysis"));
   }],
-  ["feature detail: geometry shown; the inspection measurement is Not measured", () => {
-    const m = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { partial: true })} />));
-    assert.includes(m, "CSK depth Not measured");
-    assert.includes(m, "9.50 mm");
-    assert.includes(m, "Partial");
+  ["feature detail: id, position, the measured value with its GO verdict and range; no detector figures", () => {
+    const m = text(renderToStaticMarkup(<FeatureDetail f={feature(0)} />));
+    assert.includes(m, "#1 Countersink GO");
+    assert.includes(m, "CSK depth 1.002 mm");
+    assert.includes(m, "GO range 0.947 – 1.147 mm");
+    assert.excludes(m, /Diameter|coverage|Scanned share|RMS/);
     assert.excludes(m, NO_PASS);
-    const r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { kind: "rivet",
-      measurement: { name: "flushness", value_mm: null, unit: "mm", status: "not_measured" } })} />));
-    assert.includes(r, "Flushness Not measured");
+  }],
+  ["feature detail: NO-GO, signed flushness, operator wording for not measured, nothing on non-targets", () => {
+    const flush = (over: object) => ({ name: "flushness", unit: "mm", reason: null, lower_mm: -0.15, upper_mm: 0.05,
+                                       value_mm: null, verdict: null, status: "measured" as const, ...over });
+    let r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { kind: "rivet",
+      measurement: flush({ value_mm: 0.067, verdict: "out_of_limits" }) })} />));
+    assert.includes(r, "#1 Rivet head NO-GO");
+    assert.includes(r, "Flushness +0.067 mm");
+    assert.includes(r, "GO range −0.150 – +0.050 mm");
+    r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { kind: "rivet",
+      measurement: flush({ value_mm: -0.012, verdict: "in_limits" }) })} />));
+    assert.includes(r, "Flushness −0.012 mm");
+    r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { kind: "rivet",
+      measurement: flush({ status: "not_measured", reason: "scan_distorted" }) })} />));
+    assert.includes(r, "Flushness Not measured Why Scan distorted: rescan");
+    assert.excludes(r, /\bGO\b(?! range)|NO-GO/);
+    r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { partial: true,
+      measurement: { ...feature(0).measurement, status: "not_measured", value_mm: null, verdict: null, reason: "partial" } })} />));
+    assert.includes(r, "Partial");
+    assert.includes(r, "Why Only partly scanned");
+    r = text(renderToStaticMarkup(<FeatureDetail f={feature(0, { kind: "hole", is_target: false,
+      measurement: { ...feature(0).measurement, status: "pending", value_mm: null, verdict: null } })} />));
+    assert.includes(r, "Not counted");
+    assert.excludes(r, /CSK depth|GO/);
+  }],
+  ["results: GO / NO-GO / not measured counts from the backend", () => {
+    const fs = [feature(0), feature(1, { measurement: { ...feature(1).measurement, value_mm: 1.2, verdict: "out_of_limits" } }),
+                feature(2, { measurement: { ...feature(2).measurement, status: "not_measured", value_mm: null, verdict: null,
+                                            reason: "too_few_points" } })];
+    const m = html(snapshot({ screen: "results", current_scan: scan({ features: fs, expected_count: 3 }) }));
+    assert.includes(text(m), "1 GO");
+    assert.includes(text(m), "1 NO-GO");
+    assert.includes(text(m), "1 not measured");
+    const failed = html(snapshot({ screen: "analysis_failed", current_scan: scan({ features: fs, analysis: "failed",
+                                                                                  status: "failed", analysis_error: "x" }) }));
+    assert.excludes(text(failed), /\d GO|NO-GO/);   // a failed scan has no verdicts to count
   }],
   ["map: empty scan says so; non-targets drawn but distinct", () => {
     let m = renderToStaticMarkup(<FeatureMap features={[]} width={300} height={200} />);
@@ -133,6 +167,12 @@ export const tests: Test[] = [
                                          width={300} height={200} />);
     assert.includes(m, 'class="feat target');
     assert.includes(m, 'class="feat other');
+    const nogo = { ...feature(1).measurement, value_mm: 1.3, verdict: "out_of_limits" as const };
+    const none = { ...feature(2).measurement, status: "not_measured" as const, value_mm: null, verdict: null, reason: "failed" };
+    m = renderToStaticMarkup(<FeatureMap features={[feature(0), feature(1, { measurement: nogo }),
+                                                    feature(2, { measurement: none })]} width={300} height={200} />);
+    assert.ok(/class="feat target\s+go/.test(m) && /class="feat target\s+nogo/.test(m)
+              && /class="feat target\s+unmeasured/.test(m), "targets coloured by measurement outcome");
     assert.includes(m, "+Y");
     assert.includes(m, "+X");
   }],

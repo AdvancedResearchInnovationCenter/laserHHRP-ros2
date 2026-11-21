@@ -4,7 +4,7 @@ import uuid
 
 import pytest
 
-from laser_hhrp_ui.events import DetectionFinalized
+from laser_hhrp_ui.events import DetectionFinalized, MeasuredValue, MeasurementStatus
 
 from harness import Harness
 from laser_hhrp_ui.models import ValidationError
@@ -92,8 +92,13 @@ def test_normal_csk_with_late_detections_and_no_fake_pass():
     v = h.scan(sid)
     assert (v["detected_target_count"], v["non_target_count"], v["expected_count"]) == (20, 1, 20)
     assert v["count_mismatch"] is False and v["analysis"] == "complete"
-    assert all(f["measurement"] == {"name": "csk_depth", "value_mm": None, "unit": "mm",
-                                    "status": "not_measured"} for f in v["features"])
+    targets = [f for f in v["features"] if f["is_target"]]
+    assert all(f["measurement"] == {"name": "csk_depth", "value_mm": 1.0, "unit": "mm", "status": "measured",
+                                    "reason": None, "verdict": "in_limits", "lower_mm": 0.947, "upper_mm": 1.147}
+               for f in targets)
+    hole = next(f for f in v["features"] if not f["is_target"])
+    assert hole["measurement"]["status"] == "pending"   # plain holes are never measured
+    assert v["measurement"] == {"in_limits": 20, "out_of_limits": 0, "not_measured": 0, "pending": 0}
     late = [p for t, p, s in h.events if t == "feature_detected" and p["after_release"]]
     assert len(late) == 8
     h.engine.decide(sid, "accept")
@@ -217,7 +222,8 @@ def test_finalization_waits_for_results_reordered_across_topics():
     sid = h.press()
     h.result(sid)
     h.release(sid)
-    h.finalize(sid, emitted=3, targets=3)          # arrives before results 1, 2 and stream close
+    h.finalize(sid, emitted=3, targets=3, measure=False)   # arrives before results 1, 2 and stream close ...
+    h.measure(sid, features=[MeasuredValue(i, True, 0.001) for i in (1, 2, 3)])   # ... and so does the measurement
     assert h.scan(sid)["analysis"] == "pending"
     h.result(sid, seq=2)
     h.close(sid)
@@ -701,3 +707,135 @@ def test_conflicting_terminal_message_after_completion_alerts():
     h.handle(DetectionFinalized(sid, "csk_depth", 500, 2, 2, False, "late failure"))
     assert any(a["code"] == "conflicting_terminal" for a in h.engine.alerts)
     assert h.scan(sid)["analysis"] == "complete"       # a closed scan is not rewritten
+
+
+# ---------------------------------------------------------------- measurement (inspection_node)
+def detected(h, n=3, mode="csk_depth", partial_last=False):
+    """A scan whose detection is complete (close + finalization) but not yet measured."""
+    h.ready_inspection(mode, count=max(n, 1))
+    sid = h.press()
+    for i in range(n):
+        h.result(sid, partial=partial_last and i == n - 1)
+    h.release(sid)
+    h.close(sid)
+    h.finalize(sid, measure=False)
+    return sid
+
+
+def test_scan_completes_only_with_its_measurement_and_records_go_no_go():
+    h = Harness()
+    sid = detected(h, 4)
+    assert h.scan(sid)["analysis"] == "pending" and screen(h) == "finishing_analysis"
+    h.measure(sid, {1: 0.001, 2: 0.00095, 3: 0.0012, 4: "too_few_points"})
+    v = h.scan(sid)
+    assert v["analysis"] == "complete" and screen(h) == "results"
+    assert v["measurement"] == {"in_limits": 2, "out_of_limits": 1, "not_measured": 1, "pending": 0}
+    by_id = {f["feature_id"]: f["measurement"] for f in v["features"]}
+    assert by_id[3]["verdict"] == "out_of_limits" and by_id[3]["value_mm"] == 1.2
+    assert by_id[4]["status"] == "not_measured" and by_id[4]["reason"] == "too_few_points"
+    assert h.repo.audit_events("measurement_finalized")
+    h.engine.decide(sid, "accept")                  # out-of-limits features never block the decision
+    assert h.scan(sid)["status"] == "accepted"
+
+
+def test_partial_target_is_reported_not_measured():
+    h = Harness()
+    sid = detected(h, 3, partial_last=True)
+    h.measure(sid)                                  # the node reports partial features as "partial"
+    v = h.scan(sid)
+    assert v["analysis"] == "complete" and v["partial_target_count"] == 1
+    assert v["measurement"]["not_measured"] == 1
+    assert [f["measurement"]["reason"] for f in v["features"]] == [None, None, "partial"]
+
+
+@pytest.mark.parametrize("features, why", [
+    ([MeasuredValue(1, True, 0.001), MeasuredValue(2, True, 0.001)], "not the scan's targets"),          # one missing
+    ([MeasuredValue(i, True, 0.001) for i in (1, 2, 3, 4)], "not the scan's targets"),                    # one extra
+    ([MeasuredValue(i, True, 0.001) for i in (1, 2, 2)], "not the scan's targets"),                       # duplicate
+    ([MeasuredValue(1, True, 0.001), MeasuredValue(2, True, 0.001), MeasuredValue(3, True, float("nan"))],
+     "implausible"),
+])
+def test_measurement_not_matching_the_targets_fails_the_scan(features, why):
+    h = Harness()
+    sid = detected(h, 3)
+    h.measure(sid, features=features)
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and "invalid measurement" in v["analysis_error"] and why in v["analysis_error"]
+    assert v["measurement"]["pending"] == 3          # nothing half-written
+
+
+def test_measurement_of_the_other_quantity_fails_the_scan():
+    h = Harness()
+    sid = detected(h, 2)
+    from laser_hhrp_ui.events import MeasurementFinalized
+    h.handle(MeasurementFinalized(sid, "csk_depth", "flushness", -0.00015, 0.00005,
+                                  (MeasuredValue(1, True, 0.0), MeasuredValue(2, True, 0.0))))
+    assert h.scan(sid)["analysis"] == "failed"
+
+
+def test_measurement_failure_fails_the_scan():
+    h = Harness()
+    sid = detected(h, 2)
+    h.measure(sid, success=False, error="cannot read summary.csv")
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and v["analysis_error"] == "measurement failed: cannot read summary.csv"
+    assert screen(h) == "analysis_failed"
+
+
+def test_missing_measurement_times_out_and_names_it():
+    h = Harness()
+    sid = detected(h, 2)
+    h.clock.advance(h.engine.fail_after_s + 1)
+    h.engine.tick()
+    v = h.scan(sid)
+    assert v["analysis"] == "failed" and "missing measurement" in v["analysis_error"], v["analysis_error"]
+
+
+def test_measurement_redelivery_ignored_conflict_fails():
+    h = Harness()
+    sid = detected(h, 2)
+    h.finalize(sid, measure=False)                   # (identical detector finalization: ignored)
+    first = MeasuredValue(1, True, 0.001)
+    h.measure(sid, features=[first])                 # covers only feature 1: results still fine, so ...
+    assert h.scan(sid)["analysis"] == "failed"       # ... the scan fails on the mismatch
+    h2 = Harness()
+    h2.ready_inspection(count=2)
+    sid = h2.press()
+    h2.results(sid, 2)
+    h2.release(sid)
+    h2.measure(sid)                                  # arrives before close and finalization: kept
+    h2.measure(sid)                                  # identical: ignored
+    assert h2.scan(sid)["analysis"] == "pending"
+    h2.measure(sid, {1: 0.0012})                     # different content
+    assert h2.scan(sid)["analysis"] == "failed" and "conflicting measurement" in h2.scan(sid)["analysis_error"]
+
+
+def test_late_measurement_after_completion_identical_is_quiet_different_alerts():
+    h = Harness()
+    sid = detected(h, 2)
+    h.measure(sid)
+    assert h.scan(sid)["analysis"] == "complete"
+    h.measure(sid)                                   # redelivered (transient local): same content
+    assert not any(a["code"] == "conflicting_terminal" for a in h.engine.alerts)
+    h.measure(sid, {2: 0.0013})
+    assert any(a["code"] == "conflicting_terminal" for a in h.engine.alerts)
+    assert h.scan(sid)["features"][1]["measurement"]["value_mm"] == 1.0   # a closed scan is not rewritten
+
+
+def test_ros_needs_the_measurement_node_to_be_ready():
+    h = Harness(source="ros")
+    h.ready_inspection(count=5)
+    assert "Measurement not running (inspection_node)" in h.engine.readiness()[1]
+    h.handle(MeasurementStatus(available=True))
+    assert h.engine.readiness()[0] and screen(h) == "ready"
+    h.handle(MeasurementStatus(available=False))
+    assert screen(h) == "not_ready"
+    assert any(t == "system_state" for t in h.types())
+
+
+def test_zero_target_scan_needs_an_empty_measurement():
+    h = Harness()
+    sid = detected(h, 0)
+    assert h.scan(sid)["analysis"] == "pending"
+    h.measure(sid)
+    assert h.scan(sid)["analysis"] == "complete" and h.scan(sid)["measurement"]["in_limits"] == 0

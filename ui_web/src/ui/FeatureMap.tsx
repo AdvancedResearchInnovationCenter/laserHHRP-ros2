@@ -3,6 +3,14 @@ import type { PointerEvent } from "react";
 import type { Feature } from "../api/types";
 import { fromPx, layoutMap, minSpacingPx, pick, radiusPx, scaleBar, toPx } from "../lib/map";
 
+/** A target's measurement outcome as a map class: go / nogo / unmeasured; "" before it is measured. */
+export function outcome(f: Feature): string {
+  const m = f.measurement;
+  if (!f.is_target) return "";
+  if (m.status === "measured") return m.verdict === "in_limits" ? "go" : "nogo";
+  return m.status === "not_measured" ? "unmeasured" : "";
+}
+
 export function FeatureMap({ features, width, height, selected, onSelect, compact }: {
   features: Feature[]; width: number; height: number;
   selected?: number | null; onSelect?: (resultSeq: number | null) => void; compact?: boolean;
@@ -29,7 +37,7 @@ export function FeatureMap({ features, width, height, selected, onSelect, compac
           {features.map((f) => {
             const [cx, cy] = toPx(l, f.x_mm, f.y_mm);
             const r = radiusPx(l, f);
-            const cls = ["feat", f.is_target ? "target" : "other", f.partial ? "partial" : "",
+            const cls = ["feat", f.is_target ? "target" : "other", f.partial ? "partial" : "", outcome(f),
               selected === f.result_seq ? "selected" : ""].join(" ");
             return (
               <g key={f.result_seq} className={cls} data-feature={f.feature_id}>

@@ -7,3 +7,4 @@ uint32 emitted_result_count  # tagged results published for this scan (result_se
 uint32 detected_target_count # of them, targets (CSK: countersinks; rivets: rivets)
 bool success
 string error
+string output_dir             # the scan folder (summary.csv + one PCD per feature); measured from there

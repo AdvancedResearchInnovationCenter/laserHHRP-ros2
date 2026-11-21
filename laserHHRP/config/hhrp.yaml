@@ -60,12 +60,21 @@
     calibration.duration_s: 2.0      # gyro calibration: seconds of stillness
     calibration.max_gyro_std_radps: 0.02
 
-    # ---- inspection (inspection_node) ----
-    inspection.flushness_tolerance_m: 0.00005
-    inspection.countersink_tolerance_m: 0.00005
-    inspection.fastener_type: rivet
-    inspection.fastener_diameter_m: 0.005
-    inspection.surface_deviation_limit_m: 0.0001
+    # ---- measurement (inspection_node: CSK depth, rivet flushness; docs/inspection_node.md) ----
+    # GO ranges, inclusive. CSK depth = skin plane to the cone/bore edge (truncated cone height):
+    # < 0.947 mm the rivet head sits proud (> +0.05 mm), > 1.147 mm too deep (< -0.15 mm); nominal 0.997 mm.
+    inspection.csk_depth_min_m: 0.000947
+    inspection.csk_depth_max_m: 0.001147
+    inspection.flushness_min_m: -0.00015   # head sunk at most 0.15 mm
+    inspection.flushness_max_m: 0.00005    # head proud at most 0.05 mm
+    # Direction of z in the detector's PCDs, set by the scanner's .sc1. false = countersinks / the part lie
+    # toward smaller z (test.sc1, scans since 2026-11-10). A wrong value gives "unexpected_shape", not a value.
+    inspection.csk_invert_z: false
+    inspection.rivet_invert_z: false
+    inspection.csk_angle_deg: 130.0        # included countersink angle (input to the CSK fit)
+    inspection.csk_bore_diameter_mm: 4.25  # measured bore diameter (input to the CSK fit)
+    inspection.workers: 4                  # features measured in parallel (Pi 5: 4 cores)
+    inspection.write_csv: true             # measurement.csv in each scan folder
 
     # ---- scan switch + LEDs (scan_switch_node, Pi 5 GPIO header, BCM numbers) ----
     gpio.chip: -1                    # -1 = auto (the Pi 5 header, pinctrl-rp1); or a fixed /dev/gpiochipN number

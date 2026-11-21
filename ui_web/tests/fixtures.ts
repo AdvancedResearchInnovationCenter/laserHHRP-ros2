@@ -5,7 +5,8 @@ export function feature(i: number, over: Partial<Feature> = {}): Feature {
     feature_id: i + 1, result_seq: i, kind: "countersink", is_target: true,
     x_mm: (i % 2) * 30 - 15, y_mm: 15 + Math.floor(i / 2) * 25, z_mm: 0.2, diameter_mm: 9.5, partial: false,
     quality: { coverage: 0.9, scanned_share: 1, rms_mm: 0.012 },
-    measurement: { name: "csk_depth", value_mm: null, unit: "mm", status: "not_measured" },
+    measurement: { name: "csk_depth", value_mm: 1.002, unit: "mm", status: "measured", reason: null, verdict: "in_limits",
+                   lower_mm: 0.947, upper_mm: 1.147 },
     ...over,
   };
 }
@@ -17,6 +18,12 @@ export function scan(over: Partial<Scan> = {}): Scan {
     scan_id: "scan-1", scan_number: 1, display_name: "Scan 001", inspection_uuid: "insp-1", mode: "csk_depth",
     operator_id: "ENG-1042", expected_count: 20, detected_target_count: targets.length,
     non_target_count: features.length - targets.length, partial_target_count: targets.filter((f) => f.partial).length,
+    measurement: {
+      in_limits: targets.filter((f) => f.measurement.verdict === "in_limits").length,
+      out_of_limits: targets.filter((f) => f.measurement.verdict === "out_of_limits").length,
+      not_measured: targets.filter((f) => f.measurement.status === "not_measured").length,
+      pending: targets.filter((f) => f.measurement.status === "pending").length,
+    },
     count_mismatch: targets.length !== (over.expected_count ?? 20), acquisition: "ended", acquisition_note: null,
     analysis: "complete", analysis_error: null, decision: null, decided_by: null, decided_at: null,
     status: "undecided", unassigned_reason: null, started_at: "2026-11-17T09:00:00.000Z",

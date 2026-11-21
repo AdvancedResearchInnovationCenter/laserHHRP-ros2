@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Feature, Inspection, Scan, Snapshot, UsbTarget } from "../api/types";
-import { clockTime, countText, KIND_LABEL, MEASUREMENT_LABEL, mm, MODE_LABEL, statusOf } from "../lib/format";
+import { clockTime, countText, KIND_LABEL, MEASUREMENT_LABEL, measurementReason, measurementValue, MODE_LABEL, statusOf,
+  VERDICT } from "../lib/format";
 import { FeatureMap } from "../ui/FeatureMap";
+import { MeasureCounts } from "../ui/MeasureCounts";
 import { Confirm, Modal } from "../ui/Modal";
 import { useBoxSize } from "../ui/useBoxSize";
 import { ScanActions } from "./Results";
@@ -95,6 +97,7 @@ function ScanSummary({ scan, run }: { scan: Scan; run: Run }) {
         <strong>{scan.display_name}</strong>
         <span className={`pill ${st.tone}`}>{st.label}</span>
         <span>{countText(scan.expected_count, scan.detected_target_count)}</span>
+        <MeasureCounts scan={scan} />
         {scan.partial_target_count > 0 && <span className="pill warn">{scan.partial_target_count} partial</span>}
         <span className="spacer" />
         <span className="muted small">
@@ -115,13 +118,20 @@ function ScanSummary({ scan, run }: { scan: Scan; run: Run }) {
 }
 
 function FeatureLine({ f }: { f: Feature }) {
+  const m = f.measurement;
+  const verdict = m.status === "measured" && m.verdict ? VERDICT[m.verdict] : null;
+  const reason = measurementReason(m);
   return (
     <div className="feature-line">
       <strong>#{f.feature_id} {KIND_LABEL[f.kind] ?? f.kind}</strong>
       <span>x {f.x_mm.toFixed(1)} · y {f.y_mm.toFixed(1)} mm</span>
-      <span>Ø {mm(f.diameter_mm, 2)}</span>
       {f.partial && <span className="pill warn">Partial</span>}
-      <span className="muted">{MEASUREMENT_LABEL[f.measurement.name] ?? f.measurement.name}: Not measured</span>
+      {f.is_target && (
+        <span className={m.status === "measured" ? "" : "muted"} data-testid="line-measurement">
+          {MEASUREMENT_LABEL[m.name] ?? m.name}: {measurementValue(m)}{reason ? ` (${reason})` : ""}
+        </span>
+      )}
+      {verdict && <span className={`pill ${verdict.tone}`}>{verdict.label}</span>}
     </div>
   );
 }

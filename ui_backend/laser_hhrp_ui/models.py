@@ -109,11 +109,35 @@ def _num(value):
         and math.isfinite(value) else None
 
 
-def measurement_of(m: Mode, raw_value_m) -> dict:
-    """The inspection metric. Current detectors send -1 (= not measured) and no validated algorithm
-    exists, so v0.1 never reports a measured value or a pass/fail (plan sections 1, 8)."""
+# Reason codes of the measurement algorithms (MEASUREMENT_INTEGRATION.md); the UI words them for the operator.
+MEASURE_REASONS = ("too_few_points", "surface_not_flat", "unexpected_shape", "scan_distorted", "partial", "failed")
+MAX_ABS_MEASUREMENT_M = 0.01     # a depth or flushness beyond 10 mm is not a measurement: the scan fails
+
+
+def measurement_of(m: Mode, raw_value_m=None) -> dict:
+    """The inspection metric at detection time. The detector's own value (-1) is never used: the measurement comes
+    from inspection_node after the scan (`measured_value`); until then it is pending."""
     name, _ = MEASUREMENT[m]
-    return {"name": name, "value_mm": None, "unit": "mm", "status": "not_measured"}
+    return {"name": name, "value_mm": None, "unit": "mm", "status": "pending", "reason": None, "verdict": None,
+            "lower_mm": None, "upper_mm": None}
+
+
+def measured_value(m: Mode, measured: bool, value_m, reason: str, lower_m: float, upper_m: float) -> dict:
+    """A target feature's measurement from inspection_node, with its GO / NO-GO verdict against the scan's limits
+    (inclusive). Raises ValidationError for a value that cannot be a measurement."""
+    name, _ = MEASUREMENT[m]
+    lo, hi = _num(lower_m), _num(upper_m)
+    if lo is None or hi is None or lo > hi:
+        raise ValidationError("limits", f"invalid limits {lower_m!r} .. {upper_m!r}")
+    out = {"name": name, "unit": "mm", "lower_mm": round(lo * 1000.0, 6), "upper_mm": round(hi * 1000.0, 6)}
+    if not measured:
+        code = reason if reason in MEASURE_REASONS else "failed"
+        return {**out, "value_mm": None, "status": "not_measured", "reason": code, "verdict": None}
+    v = _num(value_m)
+    if v is None or abs(v) > MAX_ABS_MEASUREMENT_M:
+        raise ValidationError("value_m", f"implausible measurement {value_m!r} m")
+    return {**out, "value_mm": round(v * 1000.0, 6), "status": "measured", "reason": None,
+            "verdict": "in_limits" if lo <= v <= hi else "out_of_limits"}
 
 
 def feature_from_result(m: Mode, feature_type: str, feature_id: int, position_m, detail: dict,

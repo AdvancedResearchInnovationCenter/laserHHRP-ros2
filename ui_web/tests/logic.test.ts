@@ -1,6 +1,6 @@
 // Map contract (plan section 9), count circles (9.3) and display wording.
 import { circleModel, circleSize, MAX_CIRCLES } from "../src/lib/circles";
-import { countText, mismatchText, STATUS } from "../src/lib/format";
+import { countText, measurementReason, measurementValue, mismatchText, rangeText, REASON_TEXT, STATUS } from "../src/lib/format";
 import { fromPx, layoutMap, MIN_HIT_PX, MIN_SPAN_MM, pick, radiusPx, scaleBar, toPx } from "../src/lib/map";
 import { assert, type Test } from "./t";
 
@@ -100,5 +100,21 @@ export const tests: Test[] = [
     for (const k of ["undecided", "failed", "incomplete_retained", "accepted_with_warning", "rescanned"] as const)
       assert.ok(STATUS[k].label.length > 0);
     assert.equal(STATUS.undecided.label, "Undecided");
+  }],
+  ["measurement wording: only a measured value is shown; every reason code has operator words", () => {
+    const base = { name: "csk_depth", unit: "mm", reason: null, verdict: null, lower_mm: 0.947, upper_mm: 1.147 };
+    assert.equal(measurementValue({ ...base, status: "measured", value_mm: 1.0024 }), "1.002 mm");
+    // a number without a measurement (e.g. a detector value) is never shown
+    assert.equal(measurementValue({ ...base, status: "pending", value_mm: 0.5 }), "Not measured");
+    assert.equal(measurementValue({ ...base, status: "not_measured", value_mm: 0.5, reason: "failed" }), "Not measured");
+    assert.equal(measurementValue({ ...base, name: "flushness", status: "measured", value_mm: 0.05 }), "+0.050 mm");
+    assert.equal(measurementValue({ ...base, name: "flushness", status: "measured", value_mm: 0 }), "0.000 mm");
+    assert.equal(rangeText({ ...base, status: "measured", value_mm: 1 }), "0.947 – 1.147 mm");
+    assert.equal(rangeText({ ...base, status: "measured", value_mm: 1, lower_mm: null }), null);
+    for (const code of ["too_few_points", "surface_not_flat", "unexpected_shape", "scan_distorted", "partial", "failed"])
+      assert.ok(REASON_TEXT[code] && !REASON_TEXT[code].includes("_"), code);
+    assert.equal(measurementReason({ ...base, status: "not_measured", value_mm: null, reason: "brand_new_code" }),
+                 REASON_TEXT.failed);
+    assert.equal(measurementReason({ ...base, status: "measured", value_mm: 1 }), null);
   }],
 ];

@@ -243,7 +243,7 @@ class HoleDetector(Node):
             success, error = False, (error + "; " + note) if error else note
         msg = DetectionFinalized(scan_id=job.scan_id, detector_mode=MODE, frame_count=len(job.indices),
                                  emitted_result_count=job.result_seq, detected_target_count=job.targets,
-                                 success=success, error=error)
+                                 success=success, error=error, output_dir=str(job.path))
         msg.header.stamp = self.get_clock().now().to_msg()
         self.pub_final.publish(msg)
         with self.lock:

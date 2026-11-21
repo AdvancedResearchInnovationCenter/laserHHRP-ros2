@@ -4,6 +4,7 @@ import type { Scan, Snapshot } from "../api/types";
 import { countText, mismatchText, plural, TARGET_NOUN } from "../lib/format";
 import { FeatureDetail } from "../ui/FeatureDetail";
 import { FeatureMap } from "../ui/FeatureMap";
+import { MeasureCounts } from "../ui/MeasureCounts";
 import { Confirm } from "../ui/Modal";
 import { useBoxSize } from "../ui/useBoxSize";
 import type { Run } from "./common";
@@ -64,6 +65,7 @@ export function ScanReview({ scan, failed, mapW = 470, mapH = 330 }: {
           </div>
         )}
         <div className="scan-notes">
+          <MeasureCounts scan={scan} />
           {scan.partial_target_count > 0 && <span className="pill warn">{scan.partial_target_count} partial</span>}
           {scan.non_target_count > 0 && (
             <span className="pill neutral">{plural(scan.non_target_count, ["other feature", "other features"])} not counted</span>

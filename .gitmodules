@@ -1,0 +1,10 @@
+[submodule "laserHHRP/third_party/laser_csk_inspection"]
+	path = laserHHRP/third_party/laser_csk_inspection
+	url = ../laser_csk_inspection.git
+	branch = optimized_algorithm
+	shallow = true
+[submodule "laserHHRP/third_party/rivet_flushness"]
+	path = laserHHRP/third_party/rivet_flushness
+	url = ../rivet_flushness.git
+	branch = main
+	shallow = true

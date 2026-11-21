@@ -334,7 +334,15 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         check(abs(sx - sy) / sy < 0.02, f"results map: uniform scale (x {sx:.3f}, y {sy:.3f} px/mm)")
         pos = b.center("document.querySelector('.feat.target')")
         b.click_at(*pos)
-        b.wait_text("Not measured")
+        b.wait_text("GO range")
+        mc = s["current_scan"]["measurement"]
+        check(mc["pending"] == 0 and mc["in_limits"] + mc["out_of_limits"] + mc["not_measured"] == len(feats)
+              and f"{mc['in_limits']} GO" in b.text()
+              and (mc["out_of_limits"] == 0 or f"{mc['out_of_limits']} NO-GO" in b.text()),
+              f"results: every target measured or reasoned, GO / NO-GO counts shown ({mc})")
+        flat = " ".join(b.text().split())
+        check("CSK depth" in flat and "GO range 0.947 – 1.147 mm" in flat,
+              "results: feature detail shows its CSK depth and the GO range")
         layout_ok(b, "results (feature selected)")
         b.shot(out, "09-results-feature")
         no_fake_pass.append(b.text())
@@ -515,7 +523,9 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         b.wait_text("Flushness")
         layout_ok(b, "results (rivets)")
         b.shot(out, "22-results-rivets")
-        check("Flushness" in b.text() and "Not measured" in b.text(), "rivets: flushness labelled Not measured")
+        flat = " ".join(b.text().split())
+        check("Flushness" in flat and "GO range −0.150 – +0.050 mm" in flat,
+              "rivets: flushness with its signed GO range")
         no_fake_pass.append(b.text())
         b.tap("Accept")
         b.wait_text("Hold the switch to scan")

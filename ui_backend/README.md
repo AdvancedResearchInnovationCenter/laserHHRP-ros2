@@ -86,20 +86,28 @@ ROS bridge (Phase 2) / MockRos ──submit()──> Ingress (bounded, thread-sa
   analyses visibly.
 - **Completion barrier:** a scan is `complete` only when acquisition ended, `StreamClosed` and
   `DetectionFinalized` arrived with **equal frame counts**, every declared `result_seq`
-  0..n‑1 is **committed to SQLite**, and the backend's target count equals the detector's.
-  Otherwise the scan is pending (watchdog: warning at 10 s, failure at 120 s) or failed with a reason.
+  0..n‑1 is **committed to SQLite**, the backend's target count equals the detector's, and
+  `inspection_node`'s `MeasurementFinalized` arrived with exactly one entry per target feature (stored in
+  one transaction). Otherwise the scan is pending (watchdog: warning at 10 s, failure at 120 s) or failed with a reason.
   Reaching the expected count never completes or stops anything.
 - **Stop evidence:** a scan completes only on the controller's confirmed stop. A stop inferred from the next
   scan's start is `UNCONFIRMED`: the analysis stays pending until the controller's own stop arrives (in any
   order relative to the stream close and finalization) or the watchdog fails it ("stop not confirmed"). A
   frame-stream close with an error, or whose stop state differs from the controller's, fails the analysis.
-- **Terminal messages:** an identical redelivery of `ScanStreamClosed` or `DetectionFinalized` is ignored; a
+- **Terminal messages:** an identical redelivery of `ScanStreamClosed`, `DetectionFinalized` or `MeasurementFinalized` is ignored; a
   different second one fails a pending analysis as a conflict. After the analysis is closed the scan is not
   rewritten, but a conflicting message raises an alert. A redelivered result counts as a duplicate only if it is identical (sequence, feature
   id, kind, position and detector detail); otherwise the scan fails as a conflict.
-- **Never invented:** measurements are always `not_measured` (both detectors send -1), `passed` is
-  ignored, `partial` comes only from the detector's `detail.partial`, and a hardware `ERROR` stop fails
-  analysis. Restart turns unfinished scans into `interrupted`.
+- **Measurements** come only from `inspection_node` (`inspection/measurement`, see
+  `docs/operator_ui/MEASUREMENT_INTEGRATION.md`): per target feature `measured` with `value_mm` and a `verdict`
+  (`in_limits` / `out_of_limits` against the inclusive GO range sent with it, `lower_mm` .. `upper_mm`), or
+  `not_measured` with the algorithm's `reason` code. Until then a feature's measurement is `pending`. A measurement
+  that does not cover exactly the targets, a value beyond 10 mm or not finite, or `success = false` fails the scan.
+  Scan views carry `measurement`: counts `in_limits`, `out_of_limits`, `not_measured`, `pending`. With live ROS,
+  Ready also needs `inspection_node` in the graph ("Measurement not running").
+- **Never invented:** the detectors' own measurement fields (-1) and `passed` are ignored, `partial` comes only
+  from the detector's `detail.partial`, and a hardware `ERROR` stop fails analysis. Restart turns unfinished
+  scans into `interrupted`.
 - **Detector control** interface (`request(mode)`, `stop()`, `replay(scan)`): `NullDetectorControl`
   now, the mock in mock mode, the process supervisor in Phase 2.
 
@@ -133,8 +141,8 @@ Analysis only when it is true.
 (including rescans and failures) appears. Columns: inspection label/UUID, mode, scan number/UUID, status,
 decision, decided by/at, operator, start/end, clock quality, expected and detected counts, mismatch,
 analysis state/error, frame count, feature id, kind, target flag, x/y/z mm, diameter, partial, coverage,
-scanned share, fit RMS, measurement name/status/value. `measurement_status` is `not_measured` and the value is
-empty in v0.1; there is no pass/fail column. Free-text cells that start with `= + - @` get a leading `'`.
+scanned share, fit RMS, measurement name/status/value, `measurement_verdict` (in_limits / out_of_limits),
+`limit_lower_mm`, `limit_upper_mm`, `measurement_reason`. Free-text cells that start with `= + - @` get a leading `'`.
 **No endpoint starts or stops the physical scan.** `/api/v1/dev/mock/*` (press, release, scenario,
 fault, hardware, layout) exist **only with `--mock`**.
 
@@ -160,6 +168,10 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
   never counts as success). Operator options: Rescan or Keep Incomplete.
 - A scan started without an operator, an open inspection or a ready detector is stored as
   `unassigned` with the reason and an alert; its results are never attributed.
+- Plan section 1 ("no pass/fail until a validated algorithm and limits exist"): since 2026-11-21 the screens show
+  GO / NO-GO per feature, against the limits given for the repeatability trials (`hhrp.yaml` `inspection.*`).
+  The algorithms' accuracy against gauge readings is not yet established; the operator decision (Accept /
+  Rescan) is unchanged and not tied to the verdicts.
 
 ## Not yet
 

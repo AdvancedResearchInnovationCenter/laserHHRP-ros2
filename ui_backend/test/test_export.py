@@ -31,7 +31,7 @@ def inspection_with_history(h):
     return insp, a, b, c
 
 
-def test_csv_lists_every_scan_and_feature_without_fake_measurement():
+def test_csv_lists_every_scan_and_feature_with_its_measurement():
     h = Harness()
     insp, a, b, c = inspection_with_history(h)
     name, text = inspection_csv(h.engine, insp["uuid"])
@@ -44,10 +44,13 @@ def test_csv_lists_every_scan_and_feature_without_fake_measurement():
     assert b_row["detected_target_count"] == "0" and b_row["feature_id"] == "" and b_row["kind"] == ""
     assert rows[4]["partial"] == "true"
     assert rows[4]["analysis_error"] == "detector reported failure: missing frames: 3 of 100"
-    for r in rows:
-        if r["feature_id"]:
-            assert r["measurement_status"] == "not_measured" and r["measurement_value_mm"] == ""
-    assert not any("pass" in c for c in COLUMNS)
+    for r in rows[:3]:                              # completed scan: inspection_node's values and verdicts
+        assert (r["measurement_status"], r["measurement_value_mm"], r["measurement_verdict"]) == \
+            ("measured", "1.0", "in_limits")
+        assert (r["limit_lower_mm"], r["limit_upper_mm"], r["measurement_reason"]) == ("0.947", "1.147", "")
+    # failed scan: no measurement, so neither a value nor a verdict
+    assert (rows[4]["measurement_status"], rows[4]["measurement_value_mm"], rows[4]["measurement_verdict"]) == \
+        ("pending", "", "")
     assert rows[0]["x_mm"] == "12.0" and rows[1]["y_mm"] == "40.0"
 
 

@@ -272,6 +272,10 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .feat.target circle { fill: rgba(90, 168, 255, 0.35); stroke: var(--target); }
 .feat.partial circle { fill: rgba(240, 178, 58, 0.35); stroke: var(--warn); stroke-dasharray: 4 3; }
 .feat.other circle { fill: none; stroke: var(--muted); stroke-dasharray: 2 3; }
+/* measured targets: GO / NO-GO; not measured: hollow */
+.feat.target.go circle { fill: var(--ok); fill-opacity: 0.35; stroke: var(--ok); }
+.feat.target.nogo circle { fill: var(--bad); fill-opacity: 0.45; stroke: var(--bad); }
+.feat.target.unmeasured:not(.partial) circle { fill: none; stroke: var(--muted); }
 .feat .sel-ring { fill: none !important; stroke: var(--ring) !important; stroke-width: 2.5; stroke-dasharray: none !important; }
 .feat-id { fill: var(--fg); font-size: 11px; }
 
@@ -291,6 +295,7 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 .detail dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 12px; margin: 0; font-size: 14px; }
 .detail dt { color: var(--muted); }
 .detail dd { margin: 0; }
+.detail dd.measure-value { font-weight: 700; font-size: 16px; }
 .retry-note { max-width: 260px; line-height: 1.25; }
 
 /* ---------- history ---------- */

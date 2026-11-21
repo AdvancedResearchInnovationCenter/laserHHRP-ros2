@@ -84,7 +84,10 @@ def test_full_workflow_over_http_and_websocket(app_parts):
         s = wait_for(lambda: (st := state(client))["screen"] in ("results", "analysis_failed") and st, timeout=20)
         assert s["screen"] == "results", s["current_scan"]["analysis_error"]
         assert s["current_scan"]["detected_target_count"] == 20
-        assert all(f["measurement"]["status"] == "not_measured" for f in s["current_scan"]["features"])
+        targets = [f for f in s["current_scan"]["features"] if f["is_target"]]
+        m = s["current_scan"]["measurement"]       # the mock's inspection_node: every target measured or reasoned
+        assert m["pending"] == 0 and m["in_limits"] + m["out_of_limits"] + m["not_measured"] == 20
+        assert all(f["measurement"]["status"] in ("measured", "not_measured") for f in targets)
         scan_id = s["current_scan"]["scan_id"]
         r = client.post(P + f"/scans/{scan_id}/decision", json={"decision": "accept"})
         assert r.status_code == 200 and r.json()["status"] == "accepted"

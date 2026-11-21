@@ -1,11 +1,12 @@
 """Mock ROS source for Phase 1 (plan section 10): drives the engine without hardware or rclpy.
 
 Simulates the physical button + controller (ScanTransition), synchronizer (StreamClosed), the selected
-detector (TaggedResult, DetectionFinalized, DetectorStatus) and hardware readiness (HardwareStatus):
+detector (TaggedResult, DetectionFinalized, DetectorStatus), inspection_node (MeasurementFinalized: values around
+the nominal, a few out of limits, partial features not measured) and hardware readiness (HardwareStatus):
 - detections appear while scanning AND after release (late), as the real asynchronous detectors do;
 - only features inside the scanned length are reported; the one at the end edge is partial;
 - one-shot fault injection: detector failure, missing result, reordered delivery, error stop,
-  stalled finalization, detector crash.
+  stalled finalization, detector crash, measurement failure.
 
 It is a development tool: its press/release endpoints exist only when the server runs with --mock,
 never next to the live ROS bridge (plan: no web API starts the physical scan).
@@ -17,12 +18,15 @@ import asyncio
 import random
 import uuid
 
-from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, ScanTransition, StreamClosed,
-                     TaggedResult)
+from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, MeasuredValue, MeasurementFinalized,
+                     MeasurementStatus, ScanTransition, StreamClosed, TaggedResult)
 from .models import Mode
 
 FAULTS = ("detector_failure", "missing_result", "reorder", "error_stop", "stall", "detector_crash",
-          "frame_mismatch")
+          "frame_mismatch", "measurement_failure")
+# the hhrp.yaml GO ranges (m) and a spread that puts a few features outside them
+MOCK_LIMITS = {Mode.CSK_DEPTH: ("csk_depth", 0.000947, 0.001147, 0.000997, 0.00007),
+               Mode.RIVET_FLUSHNESS: ("flushness", -0.00015, 0.00005, -0.00005, 0.00007)}
 SCENARIOS = ("normal", "short", "fast_next", "zero", "reordered", "missing_result", "error_stop",
              "detector_failure")
 FRAME_HZ = 120.0
@@ -82,6 +86,7 @@ class MockRos:
         return HardwareStatus(**self.hw)
 
     async def run(self) -> None:
+        self.submit(MeasurementStatus(available=True))
         while True:
             self.submit(self.hardware_status())
             await self.sleep(0.5)
@@ -198,6 +203,9 @@ class MockRos:
 
         while not scan["released"].is_set():
             y = y_at(loop.time())
+            stop_at = scan.get("release_at_mm")       # hold(): the switch is let go at this distance, exactly
+            if stop_at is not None and y >= stop_at:
+                y = stop_at
             self.hw["position_m"] = y / 1000.0
             if scan["detector"]:
                 while pending and pending[0]["y_mm"] + self.edge_guard_mm + self.decide_lag_mm <= y:
@@ -206,8 +214,12 @@ class MockRos:
                         pending.insert(0, f)
                         break
                     send(self._result(scan, len(emitted), len(emitted) + 1, f, False))
+            if stop_at is not None and y >= stop_at and self.active is scan:
+                scan["y_release"] = y
+                self.release()
+                break
             await self.sleep(0.05)
-        y_end = y_at(scan["t_release"])
+        y_end = scan.get("y_release", y_at(scan["t_release"]))
         frames = int(round((scan["t_release"] - t0) * self.speed * FRAME_HZ))
         if not scan["detector"]:
             return                               # nothing is listening: no stream close or results
@@ -244,6 +256,27 @@ class MockRos:
             for r in held:
                 self.submit(r)
             self.submit(StreamClosed(scan["scan_id"], frames, "ERROR" if scan["error"] else "IDLE"))
+        if not fail:
+            await self.sleep(0.4)                # inspection_node measures after the detector finalized
+            self.submit(self.measurement(scan, emitted))
+
+    def measurement(self, scan: dict, emitted: list[TaggedResult]) -> MeasurementFinalized:
+        quantity, lo, hi, nominal, spread = MOCK_LIMITS[scan["mode"]]
+        if self._take("measurement_failure"):
+            return MeasurementFinalized(scan["scan_id"], scan["mode"].value, quantity, lo, hi, (), success=False,
+                                        error="mock measurement failure")
+        values = []
+        for r in emitted:
+            if r.feature_type not in ("countersink", "rivet"):
+                continue
+            if r.detail.get("partial"):
+                values.append(MeasuredValue(r.feature_id, False, 0.0, "partial"))
+            elif self.rng.random() < 0.05:
+                values.append(MeasuredValue(r.feature_id, False, 0.0, "too_few_points"))
+            else:
+                values.append(MeasuredValue(r.feature_id, True, round(self.rng.gauss(nominal, spread / 2), 7)))
+        return MeasurementFinalized(scan["scan_id"], scan["mode"].value, quantity, lo, hi, tuple(values),
+                                    elapsed_s=0.4)
 
     # ---- scripted scenarios (demo and tests) ----
     def scan_seconds_for_all(self) -> float:
@@ -253,9 +286,14 @@ class MockRos:
         return (last_y + self.edge_guard_mm + 10.0) / self.scan_speed_mm_s
 
     async def hold(self, seconds: float) -> str | None:
+        """Press, roll for `seconds` (at the mock's scan speed), release. The release is tied to the distance, not
+        to a timer: a busy event loop never lets the scan run further than planned (late detections stay late)."""
         scan_id = self.press()
-        await self.sleep(seconds)
-        self.release()
+        scan = self.active
+        if scan is None:
+            return scan_id
+        scan["release_at_mm"] = seconds * self.scan_speed_mm_s
+        await scan["released"].wait()
         return scan_id
 
     async def scenario(self, name: str) -> list[str]:

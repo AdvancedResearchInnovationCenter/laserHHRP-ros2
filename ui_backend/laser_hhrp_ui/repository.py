@@ -308,6 +308,33 @@ class Repository:
                 "detected_at": r["detected_at"]})
         return out
 
+    def target_feature_ids(self, scan_id: str) -> list[int]:
+        return [r["feature_id"] for r in self._all(
+            "SELECT feature_id FROM features WHERE scan_id = ? AND is_target = 1 ORDER BY feature_id", scan_id)]
+
+    def set_measurements(self, scan_id: str, measurements: dict[int, dict]) -> None:
+        """Every target feature's measurement of one scan, in one transaction (all or nothing)."""
+        with self.tx():
+            for feature_id, m in measurements.items():
+                cur = self.db.execute(
+                    "UPDATE features SET measurement_json = ? WHERE scan_id = ? AND feature_id = ? AND is_target = 1",
+                    (json.dumps(m, sort_keys=True), scan_id, feature_id))
+                if cur.rowcount != 1:
+                    raise KeyError(f"scan {scan_id} has no target feature {feature_id}")
+
+    def measurement_counts(self, scan_id: str) -> dict:
+        """Target features by measurement outcome: in / out of limits, not measured, pending."""
+        out = {"in_limits": 0, "out_of_limits": 0, "not_measured": 0, "pending": 0}
+        for r in self._all("SELECT measurement_json FROM features WHERE scan_id = ? AND is_target = 1", scan_id):
+            m = json.loads(r["measurement_json"])
+            if m.get("status") == "measured":
+                out["in_limits" if m.get("verdict") == "in_limits" else "out_of_limits"] += 1
+            elif m.get("status") == "not_measured":
+                out["not_measured"] += 1
+            else:
+                out["pending"] += 1
+        return out
+
     def feature_counts(self, scan_id: str) -> dict:
         row = self._one(
             "SELECT COUNT(*) AS total, COALESCE(SUM(is_target), 0) AS targets, "

@@ -6,8 +6,9 @@ inspection_id)`. Commands raise CommandError, which the API maps to HTTP status 
 
 Completion barrier (section 5): a scan's analysis is complete only when acquisition ended, the
 synchronizer's stream-close and the detector's terminal acknowledgement arrived with equal frame
-counts, and every declared result sequence is committed to SQLite. Timeouts, errors and restarts
-fail explicitly; expected-count equality is never completion.
+counts, every declared result sequence is committed to SQLite, and inspection_node's measurement
+of the scan arrived for exactly its target features (MEASUREMENT_INTEGRATION.md). Timeouts, errors
+and restarts fail explicitly; expected-count equality is never completion.
 """
 
 from __future__ import annotations
@@ -17,8 +18,8 @@ from dataclasses import dataclass
 
 from . import models, raw_recording
 from .clock import Clock, iso
-from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, RecordingSession,
-                     ScanTransition, StreamClosed, TaggedResult)
+from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, MeasurementFinalized,
+                     MeasurementStatus, RecordingSession, ScanTransition, StreamClosed, TaggedResult)
 from .models import Acquisition, Analysis, Decision, Mode, Screen
 
 ACQUIRING = (Acquisition.SCANNING.value, Acquisition.PAUSED.value)
@@ -40,6 +41,7 @@ class CommandError(Exception):
 class ScanRuntime:
     closed: StreamClosed | None = None
     finalized: DetectionFinalized | None = None
+    measured: MeasurementFinalized | None = None
     released_mono: float | None = None
     warned: bool = False
 
@@ -72,6 +74,7 @@ class Engine:
         self.hardware: HardwareStatus | None = None
         self.hardware_mono: float | None = None
         self.detector = DetectorStatus(mode=None, alive=False, ready=False)
+        self.measurement_available: bool | None = None   # inspection_node in the ROS graph (None: not known yet)
         self.runtime: dict[str, ScanRuntime] = {}
         self.orphans: dict[str, list] = {}        # scan_id -> [(mono, event)] before the scan is known
         self.last_transition: dict[str, int] = {}
@@ -165,6 +168,8 @@ class Engine:
             want = insp["mode"]
             if self.detector.mode != want or not self.detector.ready:
                 reasons.append(f"Detector not ready{': ' + self.detector.error if self.detector.error else ''}")
+            if self.source == "ros" and self.measurement_available is not True:
+                reasons.append("Measurement not running (inspection_node)")
             if insp["next_expected_count"] is None:
                 reasons.append("Enter the expected feature count")
         if not self.repo.health()["ok"]:
@@ -219,6 +224,7 @@ class Engine:
 
     def scan_view(self, s: dict, features: bool = False) -> dict:
         c = self.repo.feature_counts(s["scan_id"])
+        mc = self.repo.measurement_counts(s["scan_id"])
         v = {
             "scan_id": s["scan_id"], "scan_number": s["scan_number"],
             "display_name": f"Scan {s['scan_number']:03d}" if s["scan_number"] else "Unassigned scan",
@@ -226,6 +232,8 @@ class Engine:
             "expected_count": s["expected_count"],
             "detected_target_count": c["targets"], "non_target_count": c["total"] - c["targets"],
             "partial_target_count": c["partial_targets"],
+            # target features by measurement outcome (GO / NO-GO against the limits inspection_node applied)
+            "measurement": mc,
             "count_mismatch": None if s["count_mismatch"] is None else bool(s["count_mismatch"]),
             "acquisition": s["acquisition"], "acquisition_note": s["acquisition_note"],
             "analysis": s["analysis"], "analysis_error": s["analysis_error"],
@@ -312,6 +320,10 @@ class Engine:
             self._on_closed(e)
         elif isinstance(e, DetectionFinalized):
             self._on_finalized(e)
+        elif isinstance(e, MeasurementFinalized):
+            self._on_measurement(e)
+        elif isinstance(e, MeasurementStatus):
+            self._on_measurement_status(e)
         elif isinstance(e, HardwareStatus):
             self._on_hardware(e)
         elif isinstance(e, DetectorStatus):
@@ -451,6 +463,16 @@ class Engine:
         elif isinstance(e, DetectionFinalized):
             same = (scan["emitted_result_count"] in (None, e.emitted_result_count)
                     and (e.success or scan["analysis"] != Analysis.COMPLETE.value))
+        elif isinstance(e, MeasurementFinalized):
+            same = e.success or scan["analysis"] != Analysis.COMPLETE.value
+            if same and e.success and scan["analysis"] == Analysis.COMPLETE.value:
+                stored = {f["feature_id"]: f["measurement"] for f in self.repo.features_of(scan["scan_id"])
+                          if f["is_target"]}
+                try:
+                    fresh = self._measurements(scan, e)
+                except (models.ValidationError, KeyError, ValueError):
+                    fresh = None
+                same = fresh == stored
         else:
             return
         if not same:
@@ -531,6 +553,42 @@ class Engine:
             return
         self._try_complete(e.scan_id)
 
+    def _on_measurement(self, e: MeasurementFinalized) -> None:
+        scan = self._assigned_pending(e.scan_id, e)
+        if scan is None:
+            return
+        rt = self.runtime.setdefault(e.scan_id, ScanRuntime())
+        if rt.measured is not None:
+            if rt.measured != e:
+                self._conflict(e.scan_id, "measurement", rt.measured, e)
+            return                                            # identical redelivery: ignored
+        rt.measured = e
+        self._audit("measurement_finalized", scan_id=e.scan_id, success=e.success, error=e.error,
+                    features=len(e.features), measured=sum(1 for f in e.features if f.measured),
+                    elapsed_s=round(e.elapsed_s, 3))
+        if not e.success:
+            self._fail(e.scan_id, f"measurement failed: {e.error or 'no reason given'}")
+            return
+        self._try_complete(e.scan_id)
+
+    def _on_measurement_status(self, e: MeasurementStatus) -> None:
+        if e.available != self.measurement_available:
+            self.measurement_available = e.available
+            self._emit_system()
+
+    def _measurements(self, scan: dict, e: MeasurementFinalized) -> dict[int, dict]:
+        """feature id -> stored measurement for exactly the scan's target features. Raises ValueError when the
+        measurement does not cover them one to one, ValidationError for a value that is not a measurement."""
+        m = Mode(scan["mode"])
+        if e.detector_mode != scan["mode"] or e.quantity != models.MEASUREMENT[m][0]:
+            raise ValueError(f"measurement of {e.detector_mode}/{e.quantity}, scan mode {scan['mode']}")
+        ids = [f.feature_id for f in e.features]
+        targets = self.repo.target_feature_ids(scan["scan_id"])
+        if len(set(ids)) != len(ids) or sorted(ids) != targets:
+            raise ValueError(f"measured features {sorted(ids)} are not the scan's targets {targets}")
+        return {f.feature_id: models.measured_value(m, f.measured, f.value_m, f.reason, e.lower_limit_m,
+                                                    e.upper_limit_m) for f in e.features}
+
     def _try_complete(self, scan_id: str) -> None:
         scan = self.repo.scan(scan_id)
         if scan is None or scan["analysis"] != Analysis.PENDING.value or scan["acquisition"] in ACQUIRING:
@@ -559,6 +617,13 @@ class Engine:
         if c.stop_state != scan["stop_state"]:
             return self._fail(scan_id, f"stop state mismatch: controller {scan['stop_state']}, "
                                        f"frame stream {c.stop_state}")
+        if rt.measured is None:
+            return                                            # detection complete: the measurement follows
+        try:
+            measurements = self._measurements(scan, rt.measured)
+        except (models.ValidationError, ValueError) as err:
+            return self._fail(scan_id, f"invalid measurement: {err}")
+        self.repo.set_measurements(scan_id, measurements)
         expected = scan["expected_count"]
         mismatch = None if expected is None else int(counts["targets"] != expected)
         scan = self.repo.update_scan(scan_id, analysis=Analysis.COMPLETE.value,
@@ -748,8 +813,8 @@ class Engine:
                 continue
             waited = now - rt.released_mono
             if waited >= self.fail_after_s:
-                missing = [n for n, ok in (("stream close", rt.closed), ("detector finalization", rt.finalized))
-                           if ok is None]
+                missing = [n for n, ok in (("stream close", rt.closed), ("detector finalization", rt.finalized),
+                                           ("measurement", rt.measured)) if ok is None]
                 scan = self.repo.scan(scan_id)
                 if scan is not None and scan["stop_state"] == UNCONFIRMED:
                     missing.append("the controller's stop transition: acquisition stop not confirmed (the stop "

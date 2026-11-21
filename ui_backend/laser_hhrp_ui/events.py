@@ -56,6 +56,36 @@ class DetectionFinalized:
 
 
 @dataclass(frozen=True)
+class MeasuredValue:
+    """One target feature's measurement (MeasuredFeature)."""
+    feature_id: int
+    measured: bool
+    value_m: float = 0.0          # CSK depth (positive into the part) or flushness (positive = head proud)
+    reason: str = ""              # when not measured: too_few_points | surface_not_flat | unexpected_shape |
+                                  # scan_distorted | partial | failed
+
+
+@dataclass(frozen=True)
+class MeasurementFinalized:
+    """inspection_node: the measurements of one scan, after its detection finalized (MeasurementFinalized)."""
+    scan_id: str
+    detector_mode: str
+    quantity: str                 # csk_depth | flushness
+    lower_limit_m: float          # inclusive GO range of the value
+    upper_limit_m: float
+    features: tuple = ()          # MeasuredValue, one per target feature
+    success: bool = True
+    error: str = ""
+    elapsed_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class MeasurementStatus:
+    """Whether the measurement node is in the ROS graph (subscribes the detector's finalization, publishes)."""
+    available: bool
+
+
+@dataclass(frozen=True)
 class DetectorStatus:
     """Supervisor view of the selected detector process."""
     mode: str | None             # Mode value of the running detector, None if none

@@ -38,7 +38,7 @@ def test_preview_follows_confirmed_status_and_never_persists():
     assert (p["detected_target_count"], p["partial_target_count"], p["ignored_results"]) == (3, 1, 1)
     assert [f["after_release"] for f in p["features"]] == [False, False, True]
     assert p["distance_mm"] == 31.0 and p["stop_state"] == "IDLE" and p["inspection_uuid"] == insp["uuid"]
-    assert all(f["measurement"]["status"] == "not_measured" for f in p["features"])
+    assert all(f["measurement"]["status"] == "pending" and f["measurement"]["value_mm"] is None for f in p["features"])
     # nothing recorded: no scan rows, no features, nothing to accept
     assert h.repo.db.execute("SELECT COUNT(*) FROM scans").fetchone()[0] == 0
     assert h.repo.db.execute("SELECT COUNT(*) FROM features").fetchone()[0] == 0
@@ -156,3 +156,23 @@ def test_tagged_conversions():
     rs = recording_session(NS(event=1, status_stamp=NS(sec=1, nanosec=2), session_id="20261117-1",
                               session_dir="/d", frame_count=5, write_failed=False))
     assert (rs.event, rs.status_stamp_ns, rs.frame_count) == ("CLOSED", 1_000_000_002, 5)
+
+
+def test_measurement_conversion_and_node_presence():
+    from laser_hhrp_ui.ros_bridge import measurement_available, measurement_finalized
+    m = measurement_finalized(NS(scan_id="u", detector_mode="csk_depth", quantity="csk_depth", lower_limit_m=0.000947,
+                                 upper_limit_m=0.001147, success=True, error="", elapsed_s=0.6,
+                                 features=[NS(feature_id=4, measured=True, value_m=0.001, reason="", elapsed_s=0.1),
+                                           NS(feature_id=5, measured=False, value_m=0.0, reason="partial", elapsed_s=0)]))
+    assert (m.quantity, m.lower_limit_m, m.upper_limit_m, m.elapsed_s) == ("csk_depth", 0.000947, 0.001147, 0.6)
+    assert [(f.feature_id, f.measured, f.value_m, f.reason) for f in m.features] == \
+        [(4, True, 0.001, ""), (5, False, 0.0, "partial")]
+    hash(m)                                          # immutable event: usable in the engine's comparisons
+
+    def graph(subs, pubs):
+        info = lambda names: [NS(node_name=n) for n in names]   # noqa: E731
+        return NS(get_subscriptions_info_by_topic=lambda t: info(subs),
+                  get_publishers_info_by_topic=lambda t: info(pubs))
+    assert measurement_available(graph(["inspection", "laser_hhrp_ui"], ["inspection"]))
+    assert not measurement_available(graph(["laser_hhrp_ui"], ["inspection"]))     # not listening
+    assert not measurement_available(graph(["inspection"], []))                     # not publishing

@@ -6,7 +6,8 @@ SQLite, the UI and the network are never touched on the ROS thread.
 
 Subscribed: scan/status, laser/status, nano/status, scan/storage (readiness), and the operator UI's tagged
 identity topics (Phase 3): scan/session_state (scan transitions), scan/stream_closed, inspection/result_tagged,
-inspection/detection_finalized, scan/recording_session. The untagged inspection/result is ignored (it carries
+inspection/detection_finalized, scan/recording_session, and inspection_node's inspection/measurement (once a second
+the graph is checked for that node: MeasurementStatus). The untagged inspection/result is ignored (it carries
 no scan identity); only the explicit preview fallback (Phase 2 behaviour) still reads it.
 Identity subscriptions are volatile: after a backend restart, history of old transitions must not create
 scans. Freshness limits match the scan controller's own start gate: laser < 3 s, Nano < 1.5 s.
@@ -19,8 +20,8 @@ import logging
 import threading
 import time
 
-from .events import (DetectionFinalized, HardwareStatus, LegacyResult, RecordingSession, ScanTransition, StreamClosed,
-                     TaggedResult)
+from .events import (DetectionFinalized, HardwareStatus, LegacyResult, MeasuredValue, MeasurementFinalized,
+                     MeasurementStatus, RecordingSession, ScanTransition, StreamClosed, TaggedResult)
 
 log = logging.getLogger("laser_hhrp_ui.ros_bridge")
 STATES = {0: "IDLE", 1: "SCANNING", 2: "PAUSED", 3: "ERROR"}
@@ -112,6 +113,26 @@ def detection_finalized(m) -> DetectionFinalized:
                               error=str(m.error))
 
 
+def measurement_finalized(m) -> MeasurementFinalized:
+    return MeasurementFinalized(
+        scan_id=str(m.scan_id), detector_mode=str(m.detector_mode), quantity=str(m.quantity),
+        lower_limit_m=float(m.lower_limit_m), upper_limit_m=float(m.upper_limit_m),
+        features=tuple(MeasuredValue(feature_id=int(f.feature_id), measured=bool(f.measured), value_m=float(f.value_m),
+                                     reason=str(f.reason)) for f in m.features),
+        success=bool(m.success), error=str(m.error), elapsed_s=float(m.elapsed_s))
+
+
+MEASUREMENT_TOPIC, DETECTION_FINALIZED_TOPIC = "/inspection/measurement", "/inspection/detection_finalized"
+MEASUREMENT_NODE = "inspection"
+
+
+def measurement_available(node) -> bool:
+    """inspection_node runs: it subscribes the detectors' finalization and publishes the measurements."""
+    subs = node.get_subscriptions_info_by_topic(DETECTION_FINALIZED_TOPIC)
+    pubs = node.get_publishers_info_by_topic(MEASUREMENT_TOPIC)
+    return (any(i.node_name == MEASUREMENT_NODE for i in subs) and any(i.node_name == MEASUREMENT_NODE for i in pubs))
+
+
 def recording_session(m) -> RecordingSession:
     return RecordingSession(event=RECORDING_EVENTS.get(int(m.event), f"UNKNOWN({m.event})"),
                             status_stamp_ns=stamp_ns(m.status_stamp), session_id=str(m.session_id),
@@ -134,9 +155,10 @@ class RosBridge:
         import rclpy
         from rclpy.executors import SingleThreadedExecutor
         from rclpy.qos import QoSProfile, ReliabilityPolicy
-        from laser_hhrp.msg import (DetectionFinalized as Finalized, InspectionResult, LaserStatus, NanoStatus,
-                                    ScanRecordingSession, ScanSessionState, ScanStatus, ScanStreamClosed,
-                                    StorageStatus, TaggedInspectionResult)
+        from laser_hhrp.msg import (DetectionFinalized as Finalized, InspectionResult, LaserStatus,
+                                    MeasurementFinalized as Measured, NanoStatus, ScanRecordingSession,
+                                    ScanSessionState, ScanStatus, ScanStreamClosed, StorageStatus,
+                                    TaggedInspectionResult)
 
         if not rclpy.ok():
             rclpy.init(args=None)
@@ -183,6 +205,17 @@ class RosBridge:
                                           lambda m: self.submit(detection_finalized(m)), reliable)
             self.node.create_subscription(ScanRecordingSession, "scan/recording_session",
                                           lambda m: self.submit(recording_session(m)), reliable)
+            self.node.create_subscription(Measured, "inspection/measurement",
+                                          lambda m: self.submit(measurement_finalized(m)),
+                                          QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE))
+
+            def on_graph():
+                try:
+                    self.submit(MeasurementStatus(available=measurement_available(self.node)))
+                except Exception:               # graph query failed: report unavailable, keep checking
+                    log.exception("measurement graph check failed")
+                    self.submit(MeasurementStatus(available=False))
+            self.node.create_timer(1.0, on_graph)
         self.executor = SingleThreadedExecutor()
         self.executor.add_node(self.node)
         self.thread = threading.Thread(target=self._spin, daemon=True, name="ros-bridge")
