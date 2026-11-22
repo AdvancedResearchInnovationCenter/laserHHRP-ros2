@@ -96,6 +96,9 @@ export function ScanActions({ scan, failed, run }: { scan: Scan; failed: boolean
   if (!failed) {
     return (
       <>
+        <span className="decide-hint small muted" data-testid="decide-hint">
+          Accept keeps this scan. Rescan discards it: scan the row again.
+        </span>
         <button className="secondary big" onClick={() => void run(api.decide(scan.scan_id, "rescan"))}>Rescan</button>
         <button className="primary big" onClick={() => void run(api.decide(scan.scan_id, "accept"))}>
           {scan.count_mismatch ? "Accept with warning" : "Accept"}

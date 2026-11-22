@@ -92,6 +92,10 @@ export const tests: Test[] = [
     assert.ok(/aria-label="Previous feature"/.test(m) && /aria-label="Next feature"/.test(m), "both stepper buttons");
     assert.includes(text(m), `${scan().features!.length} features`);
   }],
+  ["results: what Accept and Rescan do is said next to them (an operator took Rescan for 'next scan')", () => {
+    const m = text(html(snapshot({ screen: "results", current_scan: scan() })));
+    assert.includes(m, "Accept keeps this scan. Rescan discards it: scan the row again.");
+  }],
   ["results: count mismatch warns but still allows Accept", () => {
     const sc = scan({ features: Array.from({ length: 18 }, (_, i) => feature(i)), count_mismatch: true });
     const m = html(snapshot({ screen: "results", current_scan: sc }));
