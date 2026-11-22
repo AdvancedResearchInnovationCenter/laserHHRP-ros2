@@ -32,10 +32,8 @@ Open, in order of value:
 2. Laser dropout stripe (x ≈ −8…+2.5 mm, glare on bare aluminium, exposure 3000 µs) runs through every feature:
    try a lower `laser.exposure_time_us` or a slight scanner tilt.
 3. Odometry (`base/pose`, slip detection) is not trustworthy: a validated filter, then `system.slip_warning: true`.
-4. Pi Wi-Fi on the 192.168.1.x router drops for minutes (ARP answers, IP does not): check power save on that
-   connection (`802-11-wireless.powersave 2`), as done for ARIC_ROBOTICS.
-5. Scale: hole pitch 21.27 mm at 13 mm/s vs 21.11 mm at 32 mm/s (0.7%): look at speed dependence.
-6. A live session on the device (not a replay) with the kiosk: a new recording `ros2 bag record -a` per session
+4. Scale: hole pitch 21.27 mm at 13 mm/s vs 21.11 mm at 32 mm/s (0.7%): look at speed dependence.
+5. A live session on the device (not a replay) with the kiosk: a new recording `ros2 bag record -a` per session
    makes it re-checkable with `replay_stack.sh`.
 
 Test data: the 2026-11-22 bags are in the Pi's home (`~/rivets`, `~/rivets2`, `~/holes1`, `~/holes2`) and on the
