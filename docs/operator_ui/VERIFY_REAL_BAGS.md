@@ -44,6 +44,29 @@ Seen, not changed:
 - **Pi detection time**: 0.5–1.5 s per cycle on the Pi during the recording (RViz running too) vs ~0.1 s on the
   laptop; results no longer depend on it (1.5 s cycles tested), only how soon a feature appears.
 
+## With the operator screens (UX)
+
+`UX=1 tools/replay/replay_stack.sh ...`: an operator in headless Chromium at 800 × 480 identifies, starts the
+inspection, sets each count on the keypad, watches Scanning, opens a feature, steps with ‹ ›, accepts; every screen
+checked against the layout rules and shot (`OUT/ux/`). All 8 scans of the 4 bags: every check passed.
+
+Found on the screens, and fixed:
+- **The live count trailed the laser** (holes2: 10 of 20 at release, the rest during "Finishing analysis"):
+  OpenBLAS ran a thread per core for the detectors' small fits, 1–3.7 s per cycle under the stack's load. One
+  thread: 2.5× faster even idle; with the screens 281 ms median, 18 of 20 at release, Results 1.2 s later;
+  rivets2 65 ms, 18 / 18 at release.
+- **"scan speed too high: profiles are skipped"** (and "triggers fired late") above 25.6 mm/s with the software
+  sync, where the laser runs free and skips nothing: the limit is now the line spacing, 0.5 mm (60 mm/s), and the
+  wording says so; late triggers only with the hardware trigger.
+- **"imu: excess vibration" on Ready / Results**: that was the device carried between scans (up to 1.9 rad/s; while
+  scanning ≤ 0.21). Checked while scanning only.
+- **Long scans**: the Results map keeps its contract (uniform scale, +y down), so 20 holes on 540 mm sit 12 px
+  apart, too close for a finger. A ‹ Feature k of N › stepper walks them in scan order.
+
+Not changed: the map's corner label ("top-left x −462 · y −40 mm (scan-local, not a part origin)") reads as a
+developer note; the replay tool's pace slips when the laptop is loaded (the stack then sees a gap; a rivets2 run
+ended "Nano link lost" that way, shown correctly as Analysis failed → Keep incomplete); the browser runs at nice 15.
+
 ## Re-check
 
 ```bash
@@ -54,4 +77,6 @@ HHRP_BAGS=<dir> python3 tools/ui_baseline/run_tests_each.py hole_detector/test/t
 tools/replay/replay_stack.sh <dir>/pi_20261122/holes2 csk_depth 20 /tmp/e2e_holes2 <device calibration.yaml>
 tools/replay/replay_stack.sh <dir>/pi_20261122/rivets rivet_flushness 5,6,6,1,5 /tmp/e2e_rivets <calibration.yaml>
 # -> OUT/results.json (each scan as GET /scans/{id}), OUT/logs/
+UX=1 tools/replay/replay_stack.sh <dir>/pi_20261122/rivets rivet_flushness 5,6,6,1,5 /tmp/ux_rivets <calibration.yaml>
+# -> OUT/ux/*.png, OUT/ux/ux.json (live count over time, release -> Results), OUT/logs/ux.log (checks)
 ```

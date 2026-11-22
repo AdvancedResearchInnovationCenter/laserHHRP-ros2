@@ -9,7 +9,8 @@
 #     COUNTS       expected count per scan, comma separated ("" = keep the backend's)
 #     OUT          output folder (logs, the backend's db and detector output, results.json)
 #     CALIBRATION  the device's calibration.yaml (default ~/laser_hhrp/calibration.yaml)
-# Env: HHRP_WS (colcon workspace with install/, default the one holding this repo), RATE (replay speed, 1),
+# Env: UX=1 (the operator is a headless browser at 800 x 480 tapping the screens: ux_operator.py, shots in OUT/ux),
+#      HHRP_WS (colcon workspace with install/, default the one holding this repo), RATE (replay speed, 1),
 #      ROS_DOMAIN_ID (default 89). Isolated: own HOME under OUT, LOCALHOST discovery.
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +51,15 @@ stop() {
 }
 trap stop EXIT
 sleep 3
-python3 "$HERE/raw_replay.py" "$BAG" --ui http://127.0.0.1:8099 --mode "$MODE" --counts "$COUNTS" \
+PASSIVE=()
+if [ -n "${UX:-}" ]; then   # UX=1: an operator in a headless browser (ux_operator.py) runs the inspection
+  nice -n 15 python3 "$HERE/ux_operator.py" http://127.0.0.1:8099 "$MODE" "$COUNTS" "$OUT/ux" > "$OUT/logs/ux.log" 2>&1 &
+  ux=$!
+  PASSIVE=(--ui-passive)
+fi
+python3 "$HERE/raw_replay.py" "$BAG" --ui http://127.0.0.1:8099 --mode "$MODE" --counts "$COUNTS" "${PASSIVE[@]}" \
   --rate "${RATE:-1}" --wait "${WAIT:-300}" --out "$OUT/results.json" 2>&1 | tee "$OUT/logs/replay.log"
 rc=${PIPESTATUS[0]}
+if [ -n "${UX:-}" ]; then wait $ux; urc=$?; tail -40 "$OUT/logs/ux.log"; [ $rc = 0 ] && rc=$urc; fi
 sleep 2
 exit $rc

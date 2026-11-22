@@ -113,6 +113,7 @@ class Replay:
         self.shift = None         # ns added to Pi-time stamps
         self.api = Api(args.ui) if args.ui else None
         self.results = []
+        self.ready_since = None
 
     # ---- stamps ----
     def restamp(self, topic, msg):
@@ -175,6 +176,14 @@ class Replay:
 
     def ui_ready(self, count):
         s = self.api.state()
+        if self.args.ui_passive:      # the operator (a browser) sets the count and decides: only wait for Ready,
+            insp = s.get("inspection") or {}   # held 2 s (an operator glances at the screen before pressing)
+            ok = s.get("screen") == "ready" and (count is None or insp.get("next_expected_count") == count)
+            if not ok:
+                self.ready_since = None
+                return False
+            self.ready_since = self.ready_since or time.monotonic()
+            return time.monotonic() - self.ready_since >= 2.0
         if s.get("screen") in ("results", "analysis_failed"):
             self.settle(s)
             return False
@@ -194,6 +203,10 @@ class Replay:
     def ui_setup(self):
         api = self.api
         self.hold(lambda: bool(api.state()), "backend up", 60)
+        if self.args.ui_passive:
+            self.hold(lambda: bool((api.state().get("inspection") or {}).get("uuid")), "the operator's inspection",
+                      self.args.wait)
+            return
         if api.state().get("screen") == "identify":
             api.call("POST", "/operator", {"operator_id": self.args.operator})
         if not (api.state().get("inspection") or {}).get("uuid"):
@@ -226,6 +239,7 @@ class Replay:
                 if self.api:   # the stream starts held: status and clock map first, then the backend's setup
                     self.last[topic] = (data, t)
                     self.ui_setup()
+                    wall0 = time.monotonic_ns()       # the pace starts after the setup
             while marks and marks[0][0] is not None and marks[0][0] <= t:
                 _, kind = marks.pop(0)
                 if kind == "start":
@@ -268,7 +282,11 @@ class Replay:
             scan = s.get("current_scan")
             if scan and scan["scan_id"] not in recorded:
                 self.results.append(self.api.call("GET", "/scans/%s" % scan["scan_id"])[1])
-            self.settle(s)
+            if self.args.ui_passive:   # the operator decides on the last scan too
+                self.hold(lambda: bool((self.api.state().get("current_scan") or {}).get("decision")),
+                          "the operator's decision on the last scan", self.args.wait)
+            else:
+                self.settle(s)
         return scan_no
 
 
@@ -281,6 +299,8 @@ def main(argv=None):
     ap.add_argument("--counts", default="", help="expected feature count per scan, comma separated")
     ap.add_argument("--operator", default="REPLAY-1")
     ap.add_argument("--wait", type=float, default=300, help="s to wait for Ready / an analysis")
+    ap.add_argument("--ui-passive", action="store_true",
+                    help="with --ui: an operator (ux_operator.py) identifies, sets counts and decides; only wait")
     ap.add_argument("--out", type=Path, default=None, help="per-scan results (JSON)")
     args = ap.parse_args(argv)
     r = Replay(args)
