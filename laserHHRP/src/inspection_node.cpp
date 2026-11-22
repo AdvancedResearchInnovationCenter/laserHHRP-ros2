@@ -59,6 +59,7 @@ class InspectionNode : public rclcpp::Node {
     csk_angle_deg_ = declare_parameter("inspection.csk_angle_deg", 130.0);
     csk_bore_mm_ = declare_parameter("inspection.csk_bore_diameter_mm", 4.25);
     write_csv_ = declare_parameter("inspection.write_csv", true);
+    max_line_jump_m_ = declare_parameter("inspection.max_line_jump_m", 0.0001);
     workers_ = std::clamp(workers_, 1, 16);
 
     // the detectors publish transient-local; volatile here: a restarted node does not re-measure old scans
@@ -156,6 +157,18 @@ class InspectionNode : public rclcpp::Node {
       return r;
     }
     r.points = xyz.size() / 3;
+    if (max_line_jump_m_ > 0) {  // the device rocked over the feature: no value from tilted lines
+      const LineJump j = line_jump(xyz, row.centre_m, row.diameter_m);
+      if (j.judged && j.jump_m > max_line_jump_m_) {
+        char note[96];
+        std::snprintf(note, sizeof note, "device rocked: line height jumps %.3f mm at y %.1f mm", j.jump_m * 1e3,
+                      j.at_y_m * 1e3);
+        r.reason = "scan_distorted";
+        r.note = note;
+        r.elapsed_s = seconds_since(t0);
+        return r;
+      }
+    }
     if (kind == MeasureKind::CskDepth) {
 #ifdef LASER_HHRP_HAS_CSK_DEPTH
       csk::Params p;
@@ -301,6 +314,7 @@ class InspectionNode : public rclcpp::Node {
   int workers_ = 4;
   bool csk_invert_z_ = false, rivet_invert_z_ = false, rivet_check_orientation_ = true, write_csv_ = true;
   double csk_min_m_ = 0, csk_max_m_ = 0, flush_min_m_ = 0, flush_max_m_ = 0, csk_angle_deg_ = 130, csk_bore_mm_ = 4.25;
+  double max_line_jump_m_ = 0.0001;  // 0: no check
   rclcpp::Publisher<msg::MeasurementFinalized>::SharedPtr pub_;
   rclcpp::Subscription<msg::DetectionFinalized>::SharedPtr sub_;
   std::mutex mutex_;

@@ -283,6 +283,64 @@ TEST(MeasurementInput, LimitsAreInclusive) {
 }
 
 namespace {
+// A countersink crop like the detector's: skin z = 0.0735 m with a slight slope, a cone (no points inside the bore),
+// lines every 0.1 mm along y, points every 0.1 mm along x, within 9 mm of the centre. extra(y, x) adds to z.
+template <class F>
+std::vector<float> hole_crop(F extra, int stacked_at = -1, int stack = 0) {
+  std::vector<float> xyz;
+  const double cx = -0.004, cy = 0.121;
+  for (int line = -90; line <= 90; ++line) {
+    for (int rep = 0; rep < (line == stacked_at ? stack : 1); ++rep) {
+      const double y = line * 1e-4;
+      for (int k = -90; k <= 90; ++k) {
+        const double x = k * 1e-4, r = std::hypot(x, y);
+        if (r > 0.009 || r < 0.002) continue;
+        double z = 0.0735 + 0.002 * x + 0.001 * y;
+        if (r < 0.0044) z += (0.0044 - r) * 0.47;  // the cone, deeper = larger z
+        z += extra(y, x, rep);
+        xyz.insert(xyz.end(), {static_cast<float>(cx + x), static_cast<float>(cy + y), static_cast<float>(z)});
+      }
+    }
+  }
+  return xyz;
+}
+const double kCentre[3] = {-0.004, 0.121, 0.0735};
+}  // namespace
+
+TEST(MeasurementInput, CleanHoleHasNoLineJump) {
+  const LineJump j = line_jump(hole_crop([](double, double, int) { return 0.0; }), kCentre, 0.0088);
+  EXPECT_TRUE(j.judged);
+  EXPECT_LT(j.jump_m, 1e-6);
+}
+
+TEST(MeasurementInput, DeviceRockedOverTheHoleIsAJump) {
+  // the roller stops on the hole's centre line for 12 lines while the device tips: one side sinks up to 0.7 mm
+  auto rock = [](double y, double x, int rep) { return y == 0 ? -(0.00035 + 0.00002 * x * 1e3) * rep / 11.0 : 0.0; };
+  const LineJump j = line_jump(hole_crop(rock, 0, 12), kCentre, 0.0088);
+  ASSERT_TRUE(j.judged);
+  EXPECT_GT(j.jump_m, 0.0001);
+  EXPECT_NEAR(j.at_y_m, 0.121, 0.0005);
+}
+
+TEST(MeasurementInput, StopOutOnTheSkinIsNotAJump) {
+  // the same rock 6.4 mm from the centre, beyond the rim (holes1 hole 12: measured, repeats to 0.003 mm)
+  auto rock = [](double y, double x, int rep) {
+    return std::fabs(y - 0.0064) < 1e-9 ? -(0.00035 + 0.00002 * x * 1e3) * rep / 11.0 : 0.0;
+  };
+  const LineJump j = line_jump(hole_crop(rock, 64, 12), kCentre, 0.0088);
+  ASSERT_TRUE(j.judged);
+  EXPECT_LT(j.jump_m, 0.0001);
+}
+
+TEST(MeasurementInput, TooFewSkinLinesGiveNoVerdict) {
+  std::vector<float> xyz = hole_crop([](double, double, int) { return 0.0; });
+  std::vector<float> few;
+  for (std::size_t i = 0; i < xyz.size(); i += 3)  // only 1.5 mm of lines
+    if (std::fabs(xyz[i + 1] - 0.121) < 0.00075) few.insert(few.end(), {xyz[i], xyz[i + 1], xyz[i + 2]});
+  EXPECT_FALSE(line_jump(few, kCentre, 0.0088).judged);
+}
+
+namespace {
 // Level IMU (base = IMU), 240 Hz samples, encoder 5.33e-5 m per count.
 Extrinsics level_extrinsics() {
   Extrinsics e;

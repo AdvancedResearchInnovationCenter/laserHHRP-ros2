@@ -84,6 +84,7 @@
     inspection.csk_bore_diameter_mm: 4.25  # measured bore diameter (input to the CSK fit)
     inspection.workers: 4                  # features measured in parallel (Pi 5: 4 cores)
     inspection.write_csv: true             # measurement.csv in each scan folder
+    inspection.max_line_jump_m: 0.0001     # scan_distorted when lines over a feature jump > 0.1 mm (device rocked; 0: off)
 
     # ---- scan switch + LEDs (scan_switch_node, Pi 5 GPIO header, BCM numbers) ----
     gpio.chip: -1                    # -1 = auto (the Pi 5 header, pinctrl-rp1); or a fixed /dev/gpiochipN number

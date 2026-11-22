@@ -45,6 +45,7 @@ A failed detection gets no message (the backend has already failed the scan). An
 | `inspection.csk_bore_diameter_mm` | 4.25 | measured bore diameter (input to the CSK fit) |
 | `inspection.workers` | 4 | features measured in parallel threads (one scan at a time) |
 | `inspection.write_csv` | true | `measurement.csv` in each scan folder |
+| `inspection.max_line_jump_m` | 0.0001 | `scan_distorted` when the laser lines crossing a feature jump in height by more than this (device rocked); 0 turns the check off |
 
 ## Processing
 
@@ -53,13 +54,24 @@ detection_finalized (success) → queue → worker thread, one scan at a time:
     summary.csv → targets: CSK Depth = countersunk rows, Rivet Flushness = every row
     for each target, on `workers` threads:
         partial            → not measured, reason "partial" (never handed to the algorithm)
-        hole_NN / rivet_NN.pcd (binary float32 x y z, metres) → algorithm → value_m or reason code
+        hole_NN / rivet_NN.pcd (binary float32 x y z, metres)
+        line jump > max_line_jump_m over the feature → not measured, "scan_distorted"
+        → algorithm → value_m or reason code
     measurement.csv, then MeasurementFinalized
 ```
 
-Reason codes: `too_few_points`, `surface_not_flat`, `unexpected_shape`, `scan_distorted` (rivets), `partial`,
+Reason codes: `too_few_points`, `surface_not_flat`, `unexpected_shape`, `scan_distorted` (both modes), `partial`,
 `failed` (also a missing or unreadable PCD). The engineer detail of each not-measured feature is in the node's log
 and the `note` column of `measurement.csv`.
+
+**Device rocked over a feature** (`line_jump`, `measurement_input.hpp`). The cloud's y is the encoder's
+travel, so when the roller stops while the device tips, the tilted lines stack at one y and the feature's shape is
+wrong (2026-11-22 holes2 hole 5: the operator paused on it for 0.1 s; the skin either side read 0.7 / 0.3 mm low;
+the CSK library said `failed` or `unexpected_shape`). For every 0.25 mm of y a line is fitted to the skin around
+the feature, and each line's height is compared with the median of the lines within 3 mm. Only the lines
+crossing the feature count: a stop out on the skin leaves the feature intact (holes1 hole 12, which repeats to
+0.003 mm). On the four 2026-11-22 bags (100 features) every good feature scores ≤ 0.031 mm and the rocked hole
+0.27–0.29 mm. The operator sees "Scan distorted: rescan".
 
 ## Checks
 

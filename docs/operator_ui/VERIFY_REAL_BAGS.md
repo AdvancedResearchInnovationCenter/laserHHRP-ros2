@@ -33,6 +33,12 @@ What was wrong and is fixed (tests in brackets):
   longer than 1 s now re-anchors the filter to the encoder and restores the encoder's distance (gtest
   `Odometry.*`); the operator warning is off (`system.slip_warning: false`) until the filter is validated.
   Frame positions never used it.
+- **A hole the device rocked over read as a bad hole** (holes2 hole 5, `failed` / `unexpected_shape` in every run):
+  the operator paused on it, the roller stood at one encoder count for 0.1 s while the device tipped (skin 0.7 /
+  0.3 mm low either side), and the tilted lines stacked at one position. `inspection_node` now checks the lines
+  crossing each feature for a height jump (> 0.1 mm, `inspection.max_line_jump_m`) and reports `scan_distorted`
+  ("Scan distorted: rescan"). 100 features of the four bags: good ones ≤ 0.031 mm, this hole 0.27–0.30 mm; a stop
+  out on the skin (holes1 hole 12) does not count (gtest `MeasurementInput.*`; `measurement_check.sh` 0 failures).
 
 Seen, not changed:
 - **Laser dropout stripe** at x ≈ −8…+2.5 mm in every scan (13–60% valid, specular glare on bare aluminium,
@@ -62,6 +68,10 @@ Found on the screens, and fixed:
   scanning ≤ 0.21). Checked while scanning only.
 - **Long scans**: the Results map keeps its contract (uniform scale, +y down), so 20 holes on 540 mm sit 12 px
   apart, too close for a finger. A ‹ Feature k of N › stepper walks them in scan order.
+
+**By a person on the Pi's own screen** (`UX=external` on the Pi, Chromium kiosk on its display): rivets (5 scans),
+holes2, holes1, rivets2: every count right, every analysis complete, Results 0.7–1.2 s after the release, each
+decision recorded; values equal to the laptop runs within 0.003 mm.
 
 Not changed: the map's corner label ("top-left x −462 · y −40 mm (scan-local, not a part origin)") reads as a
 developer note; the replay tool's pace slips when the laptop is loaded (the stack then sees a gap; a rivets2 run
