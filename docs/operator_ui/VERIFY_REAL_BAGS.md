@@ -1,0 +1,57 @@
+# Verify: the whole stack on the device's own recordings (2026-11-22)
+
+Four bags recorded on the Pi with `ros2 bag record -a` while `hhrp.launch.py` ran, after the gyro and the extrinsic
+calibration (`metres_per_count` 5.33e-5): `rivets` (5 scans), `rivets2` (1 long scan), `holes1`, `holes2` (1 scan
+each, the same row of holes). About 2.2 GB, not in the repo (copies: the Pi's home, and the SSD used for this work).
+Checked component by component, then end to end, on the real data only.
+
+## Results
+
+| Component | Check | Result |
+| --- | --- | --- |
+| Laser | profile counter, timing | 120.2 profiles/s, no counter gap in any bag, stamp jitter < 0.1 ms |
+| Nano | encoder, IMU | 242 Hz each, no gap > 8 ms, no read error; clock map jitter ~2 ms |
+| Synchronizer | frames per scan | no index gap, no flags, forward rolls; spacing 0.05–0.48 mm (up to 52 mm/s) |
+| Geometry | holes round, pitch | top Ø 8.7–9.1 mm, round in x and y (the new encoder scale); pitch 21.1–21.3 mm |
+| Hole detector | 35 countersinks, 2 scans | all found once, at 0.2 s and 1.5 s cycles; the one running out of the laser field: partial |
+| Rivet detector | 41 flush heads, 6 scans | was 6 / 41; now 41 / 41 once each, at 0.2 / 1.0 / 1.5 s cycles; none on the hole rows |
+| Full pipeline | `tools/replay/replay_stack.sh`, 8 scans | every expected count met (76 features), every analysis complete |
+| CSK depth | 33 / 35 measured | 1.14–1.24 mm (median 1.21): NO-GO against 0.947–1.147. Repeatability holes1 vs holes2, 13 holes: mean diff −0.006 mm, sd per scan ~0.012 mm |
+| Flushness | 28 / 41 measured (was 10) | −0.003 to −0.056 mm (sunk), all GO; the rest: partial 3, scan_distorted 3, unexpected_shape 6, too_few_points 1 |
+
+What was wrong and is fixed (tests in brackets):
+- **Rivets were found by their height step**; these heads sit flush (0–0.08 mm sunk) and have none. Now by the seam
+  around the head, through the laser's glare stripe, the line-to-line rocking of the roll and the field's edge
+  (`rivet_detector` `test_rows_20261122`, `test_side_clip`).
+- **Hole at the laser field's edge**: its straight cut was fitted as rim (Ø 11.6 mm), and a second measurement of
+  the same hole with another diameter counted as a new hole. Now partial, once (`hole_detector` `test_rows_20261122`).
+- **Features just before the scan's end** were never decided (the guard for points still to come). The tagged
+  node runs a final pass once every frame is in (phase3_detector_check, both detectors).
+- **Flushness refused 2 of 3 correct heads** (`unexpected_shape`): the library's z check reads a mandrel groove
+  these rivets don't show. `inspection.rivet_check_orientation: false` (z is fixed by the `.sc1`, same for CSK).
+- **Odometry ran away** (pose km off on 0.5 m rolls) and raised a false "roller slip" warning 10–20× per scan: a slip
+  longer than 1 s now re-anchors the filter to the encoder and restores the encoder's distance (gtest
+  `Odometry.*`); the operator warning is off (`system.slip_warning: false`) until the filter is validated.
+  Frame positions never used it.
+
+Seen, not changed:
+- **Laser dropout stripe** at x ≈ −8…+2.5 mm in every scan (13–60% valid, specular glare on bare aluminium,
+  exposure 3000 µs): it runs through the features' middle. The detectors now cope; a lower exposure or a slight
+  tilt of the scanner would give more data there.
+- **CSK depths all ~0.06 mm above the GO maximum**: consistent across holes and scans; needs one gauge reading to
+  tell a deep row from a bias.
+- **Scale**: hole pitch 21.27 mm in holes1 (12.8 mm/s) and 21.11 mm in holes2 (32 mm/s), 0.7% apart.
+- **Pi detection time**: 0.5–1.5 s per cycle on the Pi during the recording (RViz running too) vs ~0.1 s on the
+  laptop; results no longer depend on it (1.5 s cycles tested), only how soon a feature appears.
+
+## Re-check
+
+```bash
+# bags: <dir>/pi_20261122/{rivets,rivets2,holes1,holes2}
+HHRP_BAGS=<dir> python3 tools/ui_baseline/run_tests_each.py rivet_detector/test/test_rivets.py "test_rows_20261122()"
+HHRP_BAGS=<dir> python3 tools/ui_baseline/run_tests_each.py hole_detector/test/test_detector.py "test_rows_20261122()"
+# full pipeline (core without drivers + backend + detector + measurement), as the operator would; ~3 min per bag
+tools/replay/replay_stack.sh <dir>/pi_20261122/holes2 csk_depth 20 /tmp/e2e_holes2 <device calibration.yaml>
+tools/replay/replay_stack.sh <dir>/pi_20261122/rivets rivet_flushness 5,6,6,1,5 /tmp/e2e_rivets <calibration.yaml>
+# -> OUT/results.json (each scan as GET /scans/{id}), OUT/logs/
+```

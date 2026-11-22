@@ -97,6 +97,8 @@ cd ui_backend && python3 -m laser_hhrp_ui.server --mock --static ../ui_web/dist 
 | Live ROS checks | `HHRP_WS=<ws with build/ install/> tools/ui_verify/{phase4_live,phase3_ros_check,phase3_identity_check,phase3_detector_check}.sh` |
 | Measurement node on the algorithms' test folders | `HHRP_WS=<ws> tools/ui_verify/measurement_check.sh` |
 | Legacy regression baseline | `tools/ui_baseline/run_baseline.sh` (exit 0 pass / 1 fail / 3 some tests did not run) |
+| Whole stack on a device bag (no drivers, real data) | `tools/replay/replay_stack.sh BAG MODE COUNTS OUT [calibration.yaml]` (`VERIFY_REAL_BAGS.md`) |
+| Detectors on the 2026-11-22 rows | `HHRP_BAGS=<dir with pi_20261122/> ... run_tests_each.py <script> "test_rows_20261122()"` |
 
 - Many detector tests need bags (`OneDrive_2_10-28-2026/`, `panel*`, `flap1_05112026`) that are not in the
   repo; they report SKIP / NODATA, which is **not** a pass. Baseline is "INCOMPLETE, 0 failures" without them.
@@ -160,3 +162,9 @@ features get reason `partial`. A wrong `inspection.*_invert_z` shows as `unexpec
 - The 3 mm hole on the synthetic test plate sits at `max_roundness` 0.08 and is found or not depending on
   cycle timing; detector accuracy is out of scope for the UI work.
 - Old bags in `~/bags/hhrp_202610*` use the previous `aric_laserhhrp_msgs` types and cannot be replayed.
+- Humble's rosbag2 cannot read a Jazzy bag's `metadata.yaml` (and `ros2 bag play` fails on its QoS): open the
+  `.mcap` file itself (`tools/replay/raw_replay.py`, the detectors' `bag_scans`).
+- The laser loses a fixed stretch of its line on shiny metal (x ≈ −8…+2.5 mm with test.sc1): features sit in a
+  sparse stripe. Empty runs along the scan under 3 mm are dropout, not gaps (rivet detector).
+- The odometry pose (`base/pose`, `scan/pose`) is not trustworthy yet; nothing measured uses it
+  (`docs/odometry_node.md`, known limitation). The slip warning is off in `hhrp.yaml`.
