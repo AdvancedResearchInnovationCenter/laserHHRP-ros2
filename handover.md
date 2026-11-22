@@ -31,6 +31,14 @@ Where it stands:
   vibration / roller-slip warnings, ‹ › stepper on Results, a line saying what Accept / Rescan do, and the map: now
   the operator's view from behind the device (+x left, +y up, the scan's start at the bottom; confirmed by the user
   on the device) with pinch / + / − / Fit zoom and drag on Results (`ui_web/README.md` map contract).
+- **Recording** (for experiments and ML; `docs/DATA_FORMAT.md`): every scan keeps `frames.bin` (each laser line
+  with encoder, IMU, time) and, ~1 s after its analysis, the legacy per-feature layout in the same folder
+  (`Hole-<id>/`: one ASCII PCD per line within 3 mm, `_profiles.json` with each line's encoder / IMU record, `_3d.pcd`;
+  `scan.json` with operator, decision and measurements as labels; ~75 MB per 20-hole scan). The Ready screen's
+  **Rec bags** switch records one `ros2 bag record -a` per scan (`~/laser_hhrp/bags/<operator>-<inspection>-Scan-<NNN>`,
+  ~0.4 GB each, stops below 5 GB free; wait for ● REC before pressing). Tested by the user on the Pi: 368 MB bag
+  with all 2272 frames, per-feature files written, detection 294 ms median with the bag (190 ms without).
+  `ros2 run laser_hhrp export_legacy.py` re-exports any scans.
 - **Not tried on real data**: a backward roll (detectors and map handle -y; tests synthetic only). The user does
   not need it now (positions are local per scan).
 
@@ -40,8 +48,11 @@ Open, in order of value:
    try a lower `laser.exposure_time_us` or a slight scanner tilt.
 3. Odometry (`base/pose`, slip detection) is not trustworthy: a validated filter, then `system.slip_warning: true`.
 4. Scale: hole pitch 21.27 mm at 13 mm/s vs 21.11 mm at 32 mm/s (0.7%): look at speed dependence.
-5. A live session on the device (not a replay) with the kiosk: a new recording `ros2 bag record -a` per session
-   makes it re-checkable with `replay_stack.sh`.
+5. A live session on the device (not a replay) with the kiosk, Rec bags on: field test planned for 2026-11-23
+   (data collection only; exposure kept at 3000 µs for comparability).
+6. A precision script for repeated scans (match each feature across scans by its place in the row; repeatability,
+   reproducibility, %GRR against the GO band), readable from `scan.json` / the database: to be planned with the
+   user. Preliminary CSK repeatability ~0.012 mm per scan ≈ 36% of the 0.2 mm band (two scans only).
 
 Test data: the 2026-11-22 bags are in the Pi's home (`~/rivets`, `~/rivets2`, `~/holes1`, `~/holes2`) and on the
 user's SSD; ground truth per scan in the detectors' `test_rows_20261122`.

@@ -45,7 +45,9 @@ deviations from plan), `ui_web/README.md` (map contract, layout rules),
   re-anchoring, one BLAS thread (live count), no false speed / vibration / slip warnings, Results stepper and
   Accept / Rescan hint; replay tool `tools/replay/` (laptop, Pi, with a browser or a person as operator). The user
   operated all four bags on the Pi; then `scan_distorted` for a feature the device rocked over (`a4c37c3`) and the
-  map in the operator's view (+x left, +y up) with zoom / pan on Results (`a60276f`).
+  map in the operator's view (+x left, +y up) with zoom / pan on Results (`a60276f`). For field data collection:
+  per-feature legacy files after every scan and the Ready screen's "Rec bags" switch (one `ros2 bag record -a`
+  per scan) (`9637540`, `393591c`, `6b0521d`; `docs/DATA_FORMAT.md`).
 
 ## Branches and process
 
@@ -133,6 +135,10 @@ thread: the authoritative lifecycle and completion barrier) → SQLite (`reposit
 `PRAGMA user_version`) + WebSocket/HTTP (`api.py`, `hub.py`) → browser. `detector_supervisor.py` runs one
 allowlisted detector process per inspection, output in
 `~/.local/share/laser_hhrp/ui/detector-output/<inspection>/<scan>/` (summary.csv + one PCD per feature).
+Side jobs that never touch a scan's lifecycle: `recording_export.py` (after each analysis, `export_legacy.py`
+writes the per-feature legacy layout into the scan's raw folder `~/laser_hhrp/scans/<date-time>/`) and
+`bag_recorder.py` (the "Rec bags" switch: one `ros2 bag record -a` per scan in `~/laser_hhrp/bags/`, opened on
+Ready, closed after the analysis; `Engine._bag_sync` on every watchdog tick).
 
 **Device actions.** `device.py`: gyro calibration (`calibration/start`) and power off (`--power-off-command`) from
 the screens, so the device needs no terminal (approved deviation from plan §3). The Engine refuses both during a
@@ -177,6 +183,12 @@ features get reason `partial`. A wrong `inspection.*_invert_z` shows as `unexpec
   (`hhrp-ui-browse[r]`). Browser checks can leave headless browsers and ~130 MB profiles in the temp folder.
 - The Results map is the operator's view from behind the device: +x **left**, +y **up** (laser +x is the operator's
   left, checked on the device 2026-11-22); `plan.md` §9 still says x right / y down (deviation noted there).
+- `ros2 bag record` on Jazzy prints "Recording..." ~1 s before it subscribes: readiness (REC on screen) is the
+  subscription to `/laser/raw`, `/nano/encoder`, `/nano/imu`. The bag runs in its own process group with
+  PR_SET_PDEATHSIG (SIGINT) so it closes cleanly even if the backend is killed. Play large bags with
+  `ros2 bag play --read-ahead-queue-size 12000`.
+- `frames.bin` is every laser line as placed (points, encoder, IMU at the line, time), not every sensor stream
+  (no 240 Hz IMU / encoder between lines, no calibration values, no laser intensity anywhere): bags for that.
 - `tools/replay/replay_stack.sh` starts the backend without Turn off / Restart / Service PIN, so its screens show
   no ⋮ menu (on purpose: a test run cannot power off the Pi). The kiosk has it.
 - The odometry pose (`base/pose`, `scan/pose`) is not trustworthy yet; nothing measured uses it
