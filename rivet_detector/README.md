@@ -40,7 +40,7 @@ written also fails the scan, with the reason in `DetectionFinalized.error`. The 
 ## Parameters (`config/params.yaml`, mm)
 
 - `rivet_diam`: nominal head diameter, 9. `diam_tol`: accepted ± around it, 2.
-- `min_height`: smallest |height| accepted, 0.04.
+- `min_height`: smallest |height| of a head without a seam, 0.04. `min_groove` (DEFAULTS, 0.05): smallest seam depth.
 - `ring`: the skin ring beyond the head, 2.
 - `period`: seconds between detection cycles, 0.2.
 - `viz_surface`: false.
@@ -48,15 +48,40 @@ written also fails the scan, with the reason in `DetectionFinalized.error`. The 
 
 ## How it works
 
-1. **Candidates.** A matched filter on a height image (just inside minus just outside the nominal edge) gives peaks of either sign. The head and its ring must lie on the part (MIN_ON_PART), which holes fail.
-2. **Measurement.** Once a nominal head + ring is in the crop, each candidate is measured on the raw points in a box around it, against the skin ring. The skin is turned over for a sunk head. The edge is taken per 15° sector at half the head height, and a circle is fitted to those points.
-3. **Gaps.**
-   - A gap within 0.5 mm of the head edge (a hole, or the head clipped by the part's side) rejects the head.
-   - A gap that reaches only the skin ring (a head at the edge of the laser's field) keeps it, flagged `partial`.
-4. **Each cycle.**
+1. **Height image.** The crop's skin, as a height image (0.3 mm pixels). Each image row (along the scan) is
+   corrected by its line-to-line jitter: the row median minus its running median over 3 mm. A hand-held roll
+   rocks a whole scan line by up to 0.2 mm, as much as a head or its seam.
+2. **Gaps.** Empty areas over ~1 mm are gaps (holes, the part's sides), except:
+   - laser dropout: shiny metal loses a fixed stretch of the laser line (glare), a sparse stripe along the scan;
+     its empty runs along the scan are under 3 mm (`DROPOUT_RUN`), a bore is longer;
+   - beyond the laser's field across the scan: unscanned, not a gap.
+3. **Candidates**, from two matched filters, each of either sign:
+   - **seam** (groove): a narrow ring at the nominal edge that lies off both the head inside it and the skin
+     outside it. A countersunk head's seam shows whether the head is proud, sunk or perfectly flush; this is the
+     one that finds flush heads (2026-11-22: heads 0-0.08 mm below the skin, with no height step to speak of).
+   - **step**: just inside minus just outside the nominal edge (proud or sunk heads without a seam).
+   The head and its ring must hold (nearly) no gap (MIN_ON_PART), which holes fail.
+4. **Measurement**, on the raw points around the candidate, against its own skin ring:
+   - seam: per 15° sector the radius where the radial profile peaks between 0.6 and 1.35 × the nominal radius,
+     at least `min_groove` / 2 off both the head and the skin. Searched around the nominal edge every pass, so
+     the fit never moves in to the mandrel's groove. Reported diameter = the seam's (~8.1 mm on these heads).
+   - step: the edge per sector at half the head height. A stepped head that also shows a seam is measured on
+     the seam (one edge definition).
+   A circle is fitted to the edge points; centre and radius settle in up to three passes.
+5. **Acceptance.** Diameter within `rivet_diam` ± `diam_tol`; edge rms ≤ 0.03 × radius and ≥ 70% of the scanned
+   edge sectors covered (or the stricter configured limits): real heads score ≤ 0.02 and ≥ 0.75, the rocking at
+   the field's edge lines up into ≥ 0.03 and ≤ 0.7. Both 60° ends along the scan must hold edge points (or be
+   unscanned).
+   - A gap within 0.5 mm of the head edge (a hole, or the part's side inside the field) rejects the head.
+   - A head running out of the laser's field is measured on the part it shows, flagged `partial` (sectors
+     beyond the field count as unscanned).
+6. **Each cycle.**
    - Downsampled voxel rows the laser has passed are reused.
-   - Reported heads are not measured again.
-   - Candidates found flat on a settled skin fit (a crop of at least 30 mm) are not measured again either.
+   - Reported heads are not measured again; a second measurement of a head (heads never overlap) is not a new one.
+   - A candidate found to be no head on a settled skin fit (a crop of at least 30 mm) in 3 crops is not
+     measured again.
+   - Final pass (the scan's stream closed, every frame in): heads up to the scan's last line are decided, without
+     the guard for points still to come.
 
 ## Test
 
@@ -64,7 +89,11 @@ written also fails the scan, with the reason in `DetectionFinalized.error`. The 
 python3 /bags/rivet_detector/test/test_rivets.py      # about 3 min, ends with "all checks passed"
 ```
 
-- **Synthetic panel:** batch, side clip, both signs (every head sunk instead of proud), incremental, raw boundaries, no NaN.
+- **Synthetic panel:** batch, side clip (a part side inside the field rejects; the end of the field gives partial
+  heads at most), both signs (every head sunk instead of proud), incremental, raw boundaries, no NaN.
+- **Rows of 2026-11-22** (`test_rows_20261122`, bags `pi_20261122/` under `HHRP_BAGS`, Pi, 640-point profiles):
+  all 41 flush heads of 6 scans found exactly once, seam Ø 7.7–8.5 mm, at 0.2 s and 1.5 s detection cycles; none
+  on the two hole rows.
 - **Panel 2 bags** (1280-point profiles, `/scan/frame`): 9 and 10 rivets, with partial ids pinned.
 - **Panel bags** `panel_12112026` (640-point profiles, scan toward -y, rebuilt from `/scan/cloud`):
   - b_1904 gives 9 sunk heads; the one at y = -172 mm is partial (field edge).
