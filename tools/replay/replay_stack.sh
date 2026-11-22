@@ -9,7 +9,8 @@
 #     COUNTS       expected count per scan, comma separated ("" = keep the backend's)
 #     OUT          output folder (logs, the backend's db and detector output, results.json)
 #     CALIBRATION  the device's calibration.yaml (default ~/laser_hhrp/calibration.yaml)
-# Env: UX=1 (the operator is a headless browser at 800 x 480 tapping the screens: ux_operator.py, shots in OUT/ux),
+# Env: UX=1 (the operator is a headless browser at 800 x 480 tapping the screens: ux_operator.py, shots in OUT/ux;
+#      UX=external: that operator runs on another machine through an ssh tunnel to port 8099),
 #      HHRP_WS (colcon workspace with install/, default the one holding this repo), RATE (replay speed, 1),
 #      ROS_DOMAIN_ID (default 89). Isolated: own HOME under OUT, LOCALHOST discovery.
 set -u
@@ -52,7 +53,9 @@ stop() {
 trap stop EXIT
 sleep 3
 PASSIVE=()
-if [ -n "${UX:-}" ]; then   # UX=1: an operator in a headless browser (ux_operator.py) runs the inspection
+if [ "${UX:-}" = external ]; then   # UX=external: the operator runs elsewhere (e.g. ux_operator.py on a PC, through
+  PASSIVE=(--ui-passive)            # ssh -L 8099:127.0.0.1:8099 to this host): only wait for it
+elif [ -n "${UX:-}" ]; then   # UX=1: an operator in a headless browser (ux_operator.py) runs the inspection
   nice -n 15 python3 "$HERE/ux_operator.py" http://127.0.0.1:8099 "$MODE" "$COUNTS" "$OUT/ux" > "$OUT/logs/ux.log" 2>&1 &
   ux=$!
   PASSIVE=(--ui-passive)
@@ -60,6 +63,6 @@ fi
 python3 "$HERE/raw_replay.py" "$BAG" --ui http://127.0.0.1:8099 --mode "$MODE" --counts "$COUNTS" "${PASSIVE[@]}" \
   --rate "${RATE:-1}" --wait "${WAIT:-300}" --out "$OUT/results.json" 2>&1 | tee "$OUT/logs/replay.log"
 rc=${PIPESTATUS[0]}
-if [ -n "${UX:-}" ]; then wait $ux; urc=$?; tail -40 "$OUT/logs/ux.log"; [ $rc = 0 ] && rc=$urc; fi
+if [ -n "${UX:-}" ] && [ "$UX" != external ]; then wait $ux; urc=$?; tail -40 "$OUT/logs/ux.log"; [ $rc = 0 ] && rc=$urc; fi
 sleep 2
 exit $rc
