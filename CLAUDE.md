@@ -38,7 +38,11 @@ deviations from plan), `ui_web/README.md` (map contract, layout rules),
 - **11-20** Measurement algorithms (CSK depth, rivet flushness) to arrive as a git submodule; contract in
   `MEASUREMENT_INTEGRATION.md`; work on branch `inspection-algorithms` (from `be64988`).
 - **11-21** Both algorithms integrated: submodules in `laserHHRP/third_party/`, run by `inspection_node`; GO /
-  NO-GO on the screens (`VERIFY_MEASUREMENT.md`). Not yet run on the Pi.
+  NO-GO on the screens (`VERIFY_MEASUREMENT.md`). Operator kiosk on the Pi (`deploy/kiosk/`).
+- **11-22** Whole stack tested on four bags recorded on the Pi (`VERIFY_REAL_BAGS.md`, `handover.md` §0): rivets
+  found by their seam (were 6/41, now 41/41), field-edge / final-pass fixes, flushness z check off, odometry
+  re-anchoring, one BLAS thread (live count), no false speed / vibration / slip warnings, Results stepper and
+  Accept / Rescan hint; replay tool `tools/replay/` (laptop, Pi, with a browser or a person as operator).
 
 ## Branches and process
 
@@ -166,5 +170,7 @@ features get reason `partial`. A wrong `inspection.*_invert_z` shows as `unexpec
   `.mcap` file itself (`tools/replay/raw_replay.py`, the detectors' `bag_scans`).
 - The laser loses a fixed stretch of its line on shiny metal (x ≈ −8…+2.5 mm with test.sc1): features sit in a
   sparse stripe. Empty runs along the scan under 3 mm are dropout, not gaps (rivet detector).
+- `pkill -f <pattern>` / `pgrep -f` from a tool shell match that shell's own command line: bracket one character
+  (`hhrp-ui-browse[r]`). Browser checks can leave headless browsers and ~130 MB profiles in the temp folder.
 - The odometry pose (`base/pose`, `scan/pose`) is not trustworthy yet; nothing measured uses it
   (`docs/odometry_node.md`, known limitation). The slip warning is off in `hhrp.yaml`.

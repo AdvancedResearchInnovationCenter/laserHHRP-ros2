@@ -8,6 +8,41 @@ State as of 2026-11-18, branch `ui`, after the fixes for the review of `78004e1`
 
 ---
 
+## 0. Update 2026-11-22: branch `inspection-algorithms`, tested on the device's own bags
+
+Sections 1-8 below are the UI state of 2026-11-18; since then (git log): measurement algorithms integrated
+(CSK depth, rivet flushness; `inspection_node`), the operator kiosk (`deploy/kiosk/`, installed on the Pi: cage
+session, ⋮ menu with Turn off / Restart device / Service PIN → desktop mode), and on 2026-11-22 the whole stack
+checked on four bags recorded on the Pi after the gyro + extrinsic calibration (`docs/operator_ui/VERIFY_REAL_BAGS.md`).
+
+Where it stands:
+- **Detection**: holes 35/35, rivets 41/41 (flush heads found by their seam), once each, at fast and Pi-like
+  detection cycles; regression tests `test_rows_20261122` in both detectors (bags under `HHRP_BAGS`).
+- **Full pipeline** (core without drivers + backend + detector + measurement, `tools/replay/replay_stack.sh`):
+  all 8 scans meet their counts on the laptop and on the Pi (Pi: detect ~190 ms per cycle, replay within 0.1 s).
+- **Measurement**: CSK depth 1.14-1.24 mm on that row (NO-GO; repeatability ~0.012 mm per scan; absolute level needs
+  a gauge reading). Flushness 28/41 measured, all GO (sunk 0-0.056 mm); `rivet_check_orientation: false`.
+- **Screens**: driven by a browser operator on the replayed stack (`UX=1`, or `UX=external` + `tools/replay/ux_operator.py`
+  through `ssh -L 8099`), and by the user on the Pi's own screen (5 rivet scans, all correct). Fixed from that: live
+  count lag (one BLAS thread), false speed / vibration / roller-slip warnings, ‹ › stepper on Results, a line saying
+  what Accept / Rescan do.
+
+Open, in order of value:
+1. One gauge reading of a countersink on the test row: CSK depths read ~0.06 mm above the GO maximum, consistently.
+2. Laser dropout stripe (x ≈ −8…+2.5 mm, glare on bare aluminium, exposure 3000 µs) runs through every feature:
+   try a lower `laser.exposure_time_us` or a slight scanner tilt.
+3. Odometry (`base/pose`, slip detection) is not trustworthy: a validated filter, then `system.slip_warning: true`.
+4. Pi Wi-Fi on the 192.168.1.x router drops for minutes (ARP answers, IP does not): check power save on that
+   connection (`802-11-wireless.powersave 2`), as done for ARIC_ROBOTICS.
+5. Scale: hole pitch 21.27 mm at 13 mm/s vs 21.11 mm at 32 mm/s (0.7%): look at speed dependence.
+6. A live session on the device (not a replay) with the kiosk: a new recording `ros2 bag record -a` per session
+   makes it re-checkable with `replay_stack.sh`.
+
+Test data: the 2026-11-22 bags are in the Pi's home (`~/rivets`, `~/rivets2`, `~/holes1`, `~/holes2`) and on the
+user's SSD; ground truth per scan in the detectors' `test_rows_20261122`.
+
+---
+
 ## 1. Status at a glance
 
 | Phase (plan §10) | State | Commit | Verification |
