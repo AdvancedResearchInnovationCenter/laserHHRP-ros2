@@ -163,6 +163,7 @@ The operator UI messages are additive: the original messages are unchanged, so e
 | `plugins.xml` | Registers the operator panel with RViz |
 | `scripts/timed_scan.py` | Calibrate if needed, scan N seconds, stop (testing) |
 | `scripts/read_session.py` | Reads a recorded scan folder (also usable as a Python module) |
+| `scripts/export_legacy.py` | Exports the operator UI's scans in the legacy per-feature layout (`Hole-<id>/`: one ASCII PCD per laser line near the feature, `_profiles.json` with each line's encoder / IMU record, `_3d.pcd`): `ros2 run laser_hhrp export_legacy.py OUT [--inspection INS-...]` |
 | `scripts/check_session.py` | Checks a simulated scan (positions, IMU, rivet position) |
 | `scripts/setup_scanner_network*.sh` | Puts the Pi's (or PC's) Ethernet on the scanner's subnet and writes its IP to `config/hhrp.yaml` |
 | `test/test_logic.cpp` | Unit tests of the algorithms |
