@@ -42,6 +42,9 @@ class ScanControllerNode : public rclcpp::Node {
     declare_parameter("encoder.counts_per_trigger", 4);
     declare_parameter("imu.period_ms", 0);
     declare_parameter("laser.max_profile_rate_hz", 120.0);
+    declare_parameter("sync.hardware_trigger", false);
+    declare_parameter("sync.software_rate_hz", 120.0);
+    declare_parameter("sync.max_line_spacing_m", 0.0005);
     declare_parameter("speed.warning_fraction", 0.8);
     declare_parameter("speed.min_speed_mps", 0.001);
     declare_parameter("speed.stall_timeout_s", 2.0);
@@ -166,9 +169,14 @@ class ScanControllerNode : public rclcpp::Node {
     command_pub_->publish(c);
   }
 
-  // max speed = profile rate * pitch, pitch = counts_per_trigger * metres_per_count
-  // (defaults: 120 Hz * 4 * 23 um = 11 mm/s).
+  // Hardware sync: max speed = profile rate * pitch, pitch = counts_per_trigger * metres_per_count; faster, the
+  // Nano fires late and the pitch grows. Software sync: the laser runs free at sync.software_rate_hz and no profile
+  // is skipped at any speed; the limit is the scan-line spacing the detectors were checked at
+  // (sync.max_line_spacing_m, 0.5 mm: 60 mm/s at 120 Hz; 2026-11-22 rows complete up to 0.48 mm).
+  bool hardware_sync() { return get_parameter("sync.hardware_trigger").as_bool(); }
   double max_speed_mps() {
+    if (!hardware_sync())
+      return get_parameter("sync.software_rate_hz").as_double() * get_parameter("sync.max_line_spacing_m").as_double();
     return get_parameter("laser.max_profile_rate_hz").as_double() * scale_.metres_per_count() *
            static_cast<double>(get_parameter("encoder.counts_per_trigger").as_int());
   }
@@ -210,7 +218,8 @@ class ScanControllerNode : public rclcpp::Node {
       stalled_since_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
     }
     in.stall_timeout_s = get_parameter("speed.stall_timeout_s").as_double();
-    in.overspeed_triggers = in.scanning ? nano_.overspeed : 0;
+    in.overspeed_triggers = in.scanning && hardware_sync() ? nano_.overspeed : 0;   // late triggers: hardware sync only
+    in.software_sync = !hardware_sync();
     in.nano_ok = nano_fresh();
     in.encoder_ok = nano_.encoder_ok;
     in.imu_ok = nano_.imu_ok;

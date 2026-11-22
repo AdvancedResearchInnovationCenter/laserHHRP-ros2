@@ -10,6 +10,7 @@
     sync.software_rate_hz: 120.0     # software sync: laser profile rate (scanCONTROL 2900 full
                                      # field: max ~140; above it the scanner drops to ~18/s)
     sync.profile_latency_s: 0.002    # software sync: subtracted from the profile time
+    sync.max_line_spacing_m: 0.0005  # software sync: max speed = rate x this (60 mm/s); detection checked up to 0.48 mm
 
     # ---- Nano ----
     nano.baud: 1000000               # = SERIAL_BAUD in arduino_nano.ino

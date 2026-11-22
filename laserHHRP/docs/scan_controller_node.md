@@ -28,12 +28,13 @@ Source: `src/scan_controller_node.cpp`, rules in `include/laser_hhrp/monitor_rul
 | `encoder.roller_diameter_m`, `encoder.counts_per_turn`, `encoder.direction_sign` | 0.030, 4096, 1 | scale, unless the extrinsic calibration measured it (`EncoderScale`) |
 | `imu.period_ms` | 0 | sent with START (0 = firmware default) |
 | `laser.max_profile_rate_hz` | 120.0 | trigger rate limit and max speed |
+| `sync.hardware_trigger`, `sync.software_rate_hz`, `sync.max_line_spacing_m` | false, 120.0, 0.0005 | which max-speed formula; software sync: 60 mm/s |
 | `speed.warning_fraction` | 0.8 | |
 | `speed.min_speed_mps` | 0.001 | stall threshold |
 | `speed.stall_timeout_s` | 2.0 | |
 | `system.tilt_limit_rad` | 0.087 | |
 | `system.slip_warning` | true (hhrp.yaml: false) | `odometry/slipping` raises the "roller slip" warning; off while the odometry gives false slips (docs/odometry_node.md) |
-| `system.vibration_limit_radps` | 1.0 | |
+| `system.vibration_limit_radps` | 1.0 | while scanning only (carrying the device between scans is no vibration) |
 | `system.storage_min_free_mb` | 500.0 | |
 
 All parameters are read when used, so `ros2 param set` takes effect immediately (the pitch at the
@@ -43,7 +44,9 @@ next START).
 
 ```
 metres_per_count = π · roller_diameter / counts_per_turn      (or the calibrated value)
-max_speed_mps    = max_profile_rate_hz · metres_per_count · counts_per_trigger
+max_speed_mps    = max_profile_rate_hz · metres_per_count · counts_per_trigger      (hardware sync)
+                 = sync.software_rate_hz · sync.max_line_spacing_m                (software sync: the laser runs
+                   free and skips no profile; faster only spreads the scan lines; late triggers are not reported)
 min_trigger_period_us = ceil(1e6 / max_profile_rate_hz)        (0 if the rate is 0)
 ```
 Defaults: 23.0 µm/count × 4 = 92 µm pitch, × 120 Hz = 11.0 mm/s.

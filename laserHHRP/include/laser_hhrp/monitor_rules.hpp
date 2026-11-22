@@ -24,6 +24,7 @@ struct MonitorInput {
   double stalled_for_s = 0;  // time below the minimum speed while scanning
   double stall_timeout_s = 2;
   uint32_t overspeed_triggers = 0;
+  bool software_sync = false;  // free-running laser: too fast spreads the scan lines, it skips no profile
   // IMU
   bool imu_ok = true;
   double tilt_rad = 0, tilt_limit_rad = 0.087;
@@ -55,7 +56,8 @@ inline std::vector<Fault> evaluate(const MonitorInput& in) {
   if (in.nano_ok && !in.imu_ok) f.push_back({"imu", S::WARNING, "IMU error"});
   if (in.scanning) {
     if (in.max_speed_mps > 0 && in.speed_mps > in.max_speed_mps)
-      f.push_back({"scan", S::ERROR, "scan speed too high: profiles are skipped"});
+      f.push_back({"scan", S::ERROR, in.software_sync ? "scan speed too high: scan lines too far apart"
+                                                      : "scan speed too high: profiles are skipped"});
     else if (in.max_speed_mps > 0 && in.speed_mps > in.warning_fraction * in.max_speed_mps)
       f.push_back({"scan", S::WARNING, "scan speed close to the maximum"});
     if (in.overspeed_triggers > 0)
@@ -73,7 +75,9 @@ inline std::vector<Fault> evaluate(const MonitorInput& in) {
   }
   if (in.imu_ok && in.tilt_rad > in.tilt_limit_rad)
     f.push_back({"imu", S::WARNING, "device tilt too large"});
-  if (in.imu_ok && in.rotation_radps > in.vibration_limit_radps)
+  // While scanning only: between scans the operator carries the device (up to ~2 rad/s on 2026-11-22, while
+  // scanning at most 0.2), which is no vibration and was shown as a warning on Ready and Results.
+  if (in.scanning && in.imu_ok && in.rotation_radps > in.vibration_limit_radps)
     f.push_back({"imu", S::WARNING, "excess vibration"});
   if (in.slipping)
     f.push_back({"odometry", S::WARNING, "roller slip: the roller turns but the device does not move"});

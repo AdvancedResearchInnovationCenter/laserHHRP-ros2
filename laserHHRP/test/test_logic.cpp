@@ -169,6 +169,30 @@ TEST(MonitorRules, SpeedAndDevices) {
 
 // ---- measurement inputs (inspection_node) --------------------------------------------------------
 
+TEST(MonitorRules, SoftwareSyncSaysLinesNotSkippedProfiles) {
+  MonitorInput in;
+  in.scanning = true;
+  in.max_speed_mps = 0.06;
+  in.speed_mps = 0.07;
+  in.software_sync = true;   // the laser runs free: too fast spreads the lines, nothing is skipped
+  auto f = evaluate(in);
+  ASSERT_EQ(f.size(), 1u);
+  EXPECT_EQ(f[0].message, "scan speed too high: scan lines too far apart");
+  in.software_sync = false;
+  EXPECT_EQ(evaluate(in)[0].message, "scan speed too high: profiles are skipped");
+}
+
+TEST(MonitorRules, VibrationOnlyWhileScanning) {
+  MonitorInput in;
+  in.imu_ok = true;
+  in.rotation_radps = 1.8;          // the device carried between scans
+  EXPECT_TRUE(evaluate(in).empty());
+  in.scanning = true;
+  auto f = evaluate(in);
+  ASSERT_EQ(f.size(), 1u);
+  EXPECT_EQ(f[0].message, "excess vibration");
+}
+
 TEST(MeasurementInput, HoleSummaryTargetsAreTheCountersinks) {
   std::istringstream in(
       "id,cx_mm,cy_mm,cz_mm,top_diam_mm,fit_rms_mm,ring_coverage,countersunk,partial,scanned_share,dist_to_prev_mm\n"
