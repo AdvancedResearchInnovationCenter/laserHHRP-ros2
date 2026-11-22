@@ -90,3 +90,20 @@ export function scaleBar(scale: number, targetPx = 80): { mm: number; px: number
   const mm = [1, 2, 5, 10].map((m) => m * pow).reduce((a, b) => (Math.abs(b - raw) < Math.abs(a - raw) ? b : a));
   return { mm, px: mm * scale };
 }
+
+/** Features in scan order (along y, then x): the order the ‹ › stepper walks on Results. */
+export function scanOrder<T extends { x_mm: number; y_mm: number }>(features: readonly T[]): T[] {
+  return [...features].sort((a, b) => a.y_mm - b.y_mm || a.x_mm - b.x_mm);
+}
+
+/** The feature after (dir 1) or before (dir -1) the selected one in scan order; from none: the first or the last.
+ *  Stops at the ends. Returns its result_seq, or null when there are no features. On a long scan the map's
+ *  circles sit too close to pick one by finger: the stepper reaches each one. */
+export function stepSelection(features: readonly { x_mm: number; y_mm: number; result_seq: number }[],
+                              selected: number | null, dir: 1 | -1): number | null {
+  const order = scanOrder(features);
+  if (order.length === 0) return null;
+  const i = order.findIndex((f) => f.result_seq === selected);
+  if (i < 0) return (dir > 0 ? order[0] : order[order.length - 1]).result_seq;
+  return order[Math.min(order.length - 1, Math.max(0, i + dir))].result_seq;
+}

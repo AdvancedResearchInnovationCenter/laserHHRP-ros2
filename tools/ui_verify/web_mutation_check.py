@@ -77,6 +77,10 @@ MUTATIONS = [
      "{!connected && !poweringOff && (", "{!connected && ("),
     ("Failed calibration reported as done [device]", "src/lib/format.ts",
      'if (m.startsWith("calibration failed")) {', 'if (false) {'),
+    ("Results stepper does not move [results]", "src/lib/map.ts",
+     "return order[Math.min(order.length - 1, Math.max(0, i + dir))].result_seq;", "return order[i].result_seq;"),
+    ("Results stepper hidden [results]", "src/screens/Results.tsx",
+     "{features.length > 1 && (\n          <div className=\"feature-step\">", "{false && (\n          <div className=\"feature-step\">"),
     ("Second calibration offered while one runs [device]", "src/screens/Ready.tsx",
      'disabled={calibrating} onClick={() => setCalibrate(true)}>Calibrate gyro', 'onClick={() => setCalibrate(true)}>Calibrate gyro'),
 ]

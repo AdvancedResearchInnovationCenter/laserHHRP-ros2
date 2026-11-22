@@ -4,6 +4,7 @@ import type { Scan, Snapshot } from "../api/types";
 import { countText, mismatchText, plural, TARGET_NOUN } from "../lib/format";
 import { FeatureDetail } from "../ui/FeatureDetail";
 import { FeatureMap } from "../ui/FeatureMap";
+import { scanOrder, stepSelection } from "../lib/map";
 import { MeasureCounts } from "../ui/MeasureCounts";
 import { Confirm } from "../ui/Modal";
 import { useBoxSize } from "../ui/useBoxSize";
@@ -73,7 +74,18 @@ export function ScanReview({ scan, failed, mapW = 470, mapH = 330 }: {
           {!failed && scan.detected_target_count === 0 && <span className="pill neutral">Analysis complete: nothing found</span>}
         </div>
         {selected ? <FeatureDetail f={selected} />
-          : features.length > 0 && <div className="muted small tap-hint">Tap a feature on the map for details.</div>}
+          : features.length > 0 && <div className="muted small tap-hint">
+              {features.length > 1 ? "Tap a feature on the map, or step with ‹ ›." : "Tap the feature on the map for details."}
+            </div>}
+        {features.length > 1 && (
+          <div className="feature-step">
+            <button className="secondary" aria-label="Previous feature" onClick={() => setSel(stepSelection(features, sel, -1))}>‹</button>
+            <span data-testid="feature-pos">
+              {selected ? `Feature ${scanOrder(features).indexOf(selected) + 1} of ${features.length}` : `${features.length} features`}
+            </span>
+            <button className="secondary" aria-label="Next feature" onClick={() => setSel(stepSelection(features, sel, 1))}>›</button>
+          </div>
+        )}
       </div>
     </div>
   );

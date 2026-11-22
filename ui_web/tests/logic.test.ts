@@ -1,12 +1,23 @@
 // Map contract (plan section 9), count circles (9.3) and display wording.
 import { circleModel, circleSize, MAX_CIRCLES } from "../src/lib/circles";
 import { calibrationOutcome, countText, measurementReason, measurementValue, mismatchText, rangeText, REASON_TEXT, STATUS } from "../src/lib/format";
-import { fromPx, layoutMap, MIN_HIT_PX, MIN_SPAN_MM, pick, radiusPx, scaleBar, toPx } from "../src/lib/map";
+import { fromPx, layoutMap, MIN_HIT_PX, MIN_SPAN_MM, pick, radiusPx, scaleBar, scanOrder, stepSelection, toPx } from "../src/lib/map";
 import { assert, type Test } from "./t";
 
 const P = (x_mm: number, y_mm: number, diameter_mm: number | null = 8) => ({ x_mm, y_mm, diameter_mm });
 
 export const tests: Test[] = [
+  ["results stepper: walks the features in scan order and stops at the ends", () => {
+    const fs = [{ x_mm: 0, y_mm: 40, result_seq: 7 }, { x_mm: 0, y_mm: 10, result_seq: 3 }, { x_mm: 2, y_mm: 25, result_seq: 5 }];
+    assert.deepEqual(scanOrder(fs).map((f) => f.result_seq), [3, 5, 7]);
+    assert.equal(stepSelection(fs, null, 1), 3, "from none, › selects the first along the scan");
+    assert.equal(stepSelection(fs, null, -1), 7, "from none, ‹ selects the last");
+    assert.equal(stepSelection(fs, 3, 1), 5);
+    assert.equal(stepSelection(fs, 5, -1), 3);
+    assert.equal(stepSelection(fs, 7, 1), 7, "stops at the last");
+    assert.equal(stepSelection(fs, 3, -1), 3, "stops at the first");
+    assert.equal(stepSelection([], null, 1), null);
+  }],
   ["map: +x is drawn rightward and +y downward", () => {
     const l = layoutMap([P(0, 0), P(50, 0), P(0, 80)], 400, 300);
     const [x0, y0] = toPx(l, 0, 0), [x1] = toPx(l, 50, 0), [, y2] = toPx(l, 0, 80);

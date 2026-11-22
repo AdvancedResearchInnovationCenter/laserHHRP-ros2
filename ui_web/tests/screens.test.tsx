@@ -87,6 +87,11 @@ export const tests: Test[] = [
     assert.ok(buttons(m).includes("Accept") && buttons(m).includes("Rescan"));
     assert.excludes(text(m), NO_PASS);
   }],
+  ["results: a ‹ › stepper reaches every feature (circles too close on a long scan to pick by finger)", () => {
+    const m = html(snapshot({ screen: "results", current_scan: scan() }));
+    assert.ok(/aria-label="Previous feature"/.test(m) && /aria-label="Next feature"/.test(m), "both stepper buttons");
+    assert.includes(text(m), `${scan().features!.length} features`);
+  }],
   ["results: count mismatch warns but still allows Accept", () => {
     const sc = scan({ features: Array.from({ length: 18 }, (_, i) => feature(i)), count_mismatch: true });
     const m = html(snapshot({ screen: "results", current_scan: sc }));
