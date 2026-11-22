@@ -325,12 +325,12 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         geo = b.js("""[...document.querySelectorAll('.feat.target circle:not(.sel-ring)')].map(c =>
             [+c.getAttribute('cx'), +c.getAttribute('cy'), +c.getAttribute('r')])""")
         feats = [f for f in s["current_scan"]["features"] if f["is_target"]]
-        # map contract: larger x right, larger y down, one uniform scale
+        # map contract: larger x left, larger y up (the operator's view, the scan starts at the bottom), one uniform scale
         fx = sorted(zip(feats, geo), key=lambda p: p[0]["x_mm"])
         fy = sorted(zip(feats, geo), key=lambda p: p[0]["y_mm"])
-        check(fx[0][1][0] < fx[-1][1][0] and fy[0][1][1] < fy[-1][1][1], "results map: +x rightward, +y downward")
-        sx = (fx[-1][1][0] - fx[0][1][0]) / (fx[-1][0]["x_mm"] - fx[0][0]["x_mm"])
-        sy = (fy[-1][1][1] - fy[0][1][1]) / (fy[-1][0]["y_mm"] - fy[0][0]["y_mm"])
+        check(fx[0][1][0] > fx[-1][1][0] and fy[0][1][1] > fy[-1][1][1], "results map: +x leftward, +y upward")
+        sx = (fx[0][1][0] - fx[-1][1][0]) / (fx[-1][0]["x_mm"] - fx[0][0]["x_mm"])
+        sy = (fy[0][1][1] - fy[-1][1][1]) / (fy[-1][0]["y_mm"] - fy[0][0]["y_mm"])
         check(abs(sx - sy) / sy < 0.02, f"results map: uniform scale (x {sx:.3f}, y {sy:.3f} px/mm)")
         pos = b.center("document.querySelector('.feat.target')")
         b.click_at(*pos)
@@ -345,6 +345,54 @@ def run(base: str, browser_exe: str, out: Path) -> int:
               "results: feature detail shows its CSK depth and the GO range")
         layout_ok(b, "results (feature selected)")
         b.shot(out, "09-results-feature")
+        # zoom: + doubles the scale about the map's centre, a tap still selects, Fit shows the whole scan; a
+        # two-finger pinch zooms, one finger drags
+        spread = """(() => { const c = [...document.querySelectorAll('.feat.target circle:not(.sel-ring)')];
+            const x = c.map(e => +e.getAttribute('cx')), y = c.map(e => +e.getAttribute('cy'));
+            return [Math.max(...y) - Math.min(...y), x[0], y[0]]; })()"""
+        fit = b.js(spread)
+        b.click_at(*b.center("document.querySelector('[aria-label=\"Zoom in\"]')"))
+        time.sleep(0.3)
+        z2 = b.js(spread)
+        check(abs(z2[0] / fit[0] - 2) < 0.01, f"results map: + zooms in x2 ({z2[0] / fit[0]:.2f})")
+        layout_ok(b, "results (zoomed)")
+        b.shot(out, "09c-results-zoomed")
+        vis = b.js("""(() => { const m = document.querySelector('svg.map').getBoundingClientRect();
+            const g = [...document.querySelectorAll('.feat.target')].find(e => { const r = e.getBoundingClientRect();
+              const x = r.x + r.width / 2, y = r.y + r.height / 2;
+              return x > m.x + 80 && x < m.right - 80 && y > m.y + 40 && y < m.bottom - 60; });
+            if (!g) return null; const r = g.getBoundingClientRect();
+            return [r.x + r.width / 2, r.y + r.height / 2, g.dataset.feature]; })()""")
+        check(vis is not None, "results map: zoomed in, features still in view")
+        if vis:
+            b.click_at(vis[0], vis[1])
+            time.sleep(0.3)
+            check(b.js("document.querySelector('.feat.selected')?.dataset.feature") == vis[2],
+                  f"results map: a tap on the zoomed map selects that feature ({vis[2]})")
+        b.tap("Fit")
+        time.sleep(0.3)
+        check(abs(b.js(spread)[0] / fit[0] - 1) < 0.01, "results map: Fit shows the whole scan again")
+        m = b.js("(() => { const r = document.querySelector('svg.map').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")
+        def touch(kind, pts):
+            b.send("Input.dispatchTouchEvent", type=kind,
+                   touchPoints=[{"x": x, "y": y, "id": i} for i, (x, y) in enumerate(pts)])
+        touch("touchStart", [(m[0] - 30, m[1]), (m[0] + 30, m[1])])
+        for k in range(1, 7):
+            touch("touchMove", [(m[0] - 30 - 10 * k, m[1]), (m[0] + 30 + 10 * k, m[1])])
+        touch("touchEnd", [])
+        time.sleep(0.3)
+        pz = b.js(spread)
+        check(2.5 < pz[0] / fit[0] < 3.5, f"results map: pinch zooms (x{pz[0] / fit[0]:.2f} for fingers 60 -> 180 px)")
+        touch("touchStart", [(m[0], m[1])])
+        for k in range(1, 7):
+            touch("touchMove", [(m[0] + 10 * k, m[1] + 5 * k)])
+        touch("touchEnd", [])
+        time.sleep(0.3)
+        dr = b.js(spread)
+        check(abs(dr[1] - pz[1] - 60) < 2 and abs(dr[2] - pz[2] - 30) < 2 and abs(dr[0] - pz[0]) < 0.5,
+              f"results map: a finger drags the zoomed map ({dr[1] - pz[1]:.0f}, {dr[2] - pz[2]:.0f} px)")
+        b.shot(out, "09d-results-pinched")
+        b.tap("Fit")
         no_fake_pass.append(b.text())
         # light theme: the faint header switch, remembered across a reload
         dark_bg = b.js("getComputedStyle(document.body).backgroundColor")

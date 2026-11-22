@@ -15,10 +15,14 @@ screens, chosen by the backend's `snapshot.screen`:
 Header: state pill, inspection, *Time not verified*, operator, a ⚠ button listing alerts and warnings, the
 connection dot. If the backend connection drops, the screen is covered by a "not current" notice.
 
-**Map contract** ([src/lib/map.ts](src/lib/map.ts)): x = `position_m[0]·1000` rightward, y =
-`position_m[1]·1000` downward, one uniform scale, +X / +Y marker and scale bar, the label states the view's real
-top-left in scan-local mm (not a part origin). Taps select the nearest feature within 24 px, larger than the
-drawn circles.
+**Map contract** ([src/lib/map.ts](src/lib/map.ts)): the operator's own view from behind the device: x =
+`position_m[0]·1000` **leftward** (laser +x is the operator's left, checked on the device), y = `position_m[1]·1000`
+**upward** (the scan's start at the bottom, as the operator rolls away; signed, so a backwards scan runs downward).
+Changed on 2026-11-22 at the user's request from x rightward / y downward (the same view turned 180°). One uniform
+scale, +X / +Y marker
+and scale bar, the label states the view's real top-left in scan-local mm (not a part origin). Taps select the
+nearest feature within 24 px, larger than the drawn circles. On Results the map zooms (pinch, + / −, mouse
+wheel; up to 16×) and pans (drag); Fit shows the whole scan; a feature stepped to with ‹ › is brought into view.
 
 The frontend is a view. It never derives lifecycle, counts or target filtering: those come from the backend
 (`is_target`, `detected_target_count`, `count_mismatch`, `status`, `retry_available`). On connect / reconnect it

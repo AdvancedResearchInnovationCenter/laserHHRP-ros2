@@ -1,16 +1,19 @@
 // Spatial results map (plan section 9, map contract). Pure geometry, unit-tested.
-//   screen x = feature x_mm (position_m[0] * 1000) rightward, across the laser line
-//   screen y = feature y_mm (position_m[1] * 1000) downward, along the roll / scan axis
-// Uniform scale (no distortion). The top-left is the bounding minimum of this scan's features, not a
-// workpiece origin; there is no registration between scans.
+//   screen x = feature x_mm (position_m[0] * 1000) leftward, across the laser line: laser +x is the operator's
+//   left (checked 2026-11-22: holes1's row left the line on the -x side, the operator's right)
+//   screen y = feature y_mm (position_m[1] * 1000) upward, along the roll / scan axis: the scan's start at the
+//   bottom, the way the operator rolls away from themselves (signed: a backwards scan runs downward)
+// Together: the operator's own view of the part, from behind the device (a rotation of x / y, not a mirror).
+// Uniform scale (no distortion). The view's corner is set by this scan's features, not a workpiece origin; there
+// is no registration between scans. Results can zoom and pan (MapView): zoomed() gives the layout as drawn.
 
 export interface MapPoint { x_mm: number; y_mm: number; diameter_mm: number | null }
 
 export interface MapLayout {
   width: number; height: number;
   scale: number;                       // px per mm, the same on both axes
-  minX: number; minY: number;          // mm at the content's top-left
-  ox: number; oy: number;              // px offset of (minX, minY)
+  maxX: number; maxY: number;          // mm at the content's top-left (+x is left, +y is up)
+  ox: number; oy: number;              // px offset of (maxX, maxY)
   empty: boolean;
 }
 
@@ -22,7 +25,7 @@ const radiusMm = (p: MapPoint) => (p.diameter_mm && p.diameter_mm > 0 ? p.diamet
 
 /** `pad` all round; `padBottom` keeps the axis marker and scale bar clear of features. */
 export function layoutMap(points: MapPoint[], width: number, height: number, pad = 28, padBottom = pad): MapLayout {
-  if (points.length === 0) return { width, height, scale: 1, minX: 0, minY: 0, ox: pad, oy: pad, empty: true };
+  if (points.length === 0) return { width, height, scale: 1, maxX: 0, maxY: 0, ox: pad, oy: pad, empty: true };
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of points) {
     const r = radiusMm(p);
@@ -43,11 +46,11 @@ export function layoutMap(points: MapPoint[], width: number, height: number, pad
   // centre the content on the axis with slack
   const ox = (width - (maxX - minX) * scale) / 2;
   const oy = pad + (innerH - (maxY - minY) * scale) / 2;
-  return { width, height, scale, minX, minY, ox, oy, empty: false };
+  return { width, height, scale, maxX, maxY, ox, oy, empty: false };
 }
 
 export function toPx(l: MapLayout, x_mm: number, y_mm: number): [number, number] {
-  return [l.ox + (x_mm - l.minX) * l.scale, l.oy + (y_mm - l.minY) * l.scale];
+  return [l.ox + (l.maxX - x_mm) * l.scale, l.oy + (l.maxY - y_mm) * l.scale];
 }
 
 export function radiusPx(l: MapLayout, p: MapPoint, minPx = 5): number {
@@ -71,7 +74,46 @@ export function pick(points: MapPoint[], l: MapLayout, px: number, py: number, m
 
 /** Scan-local mm at a screen point (the map's real top-left is fromPx(l, 0, 0)). */
 export function fromPx(l: MapLayout, px: number, py: number): [number, number] {
-  return [l.minX + (px - l.ox) / l.scale, l.minY + (py - l.oy) / l.scale];
+  return [l.maxX - (px - l.ox) / l.scale, l.maxY - (py - l.oy) / l.scale];
+}
+
+/** Zoom and pan on top of the fitted layout: drawn = centre + (fitted - centre) * zoom + pan (px). */
+export interface MapView { zoom: number; panX: number; panY: number }
+export const FIT_VIEW: MapView = { zoom: 1, panX: 0, panY: 0 };
+export const MAX_ZOOM = 16;
+
+/** The layout as drawn in `v`: every function above (toPx, pick, radiusPx, scaleBar, fromPx) works on it. */
+export function zoomed(l: MapLayout, v: MapView): MapLayout {
+  if (v.zoom === 1 && v.panX === 0 && v.panY === 0) return l;
+  const cx = l.width / 2, cy = l.height / 2;
+  return { ...l, scale: l.scale * v.zoom, ox: cx + (l.ox - cx) * v.zoom + v.panX, oy: cy + (l.oy - cy) * v.zoom + v.panY };
+}
+
+/** Keeps the fitted view's area covering the map: no panning the scan out of sight, none at zoom 1. */
+export function clampView(l: MapLayout, v: MapView): MapView {
+  const zoom = Math.min(MAX_ZOOM, Math.max(1, v.zoom));
+  const mx = (zoom - 1) * l.width / 2, my = (zoom - 1) * l.height / 2;
+  return { zoom, panX: Math.min(mx, Math.max(-mx, v.panX)), panY: Math.min(my, Math.max(-my, v.panY)) };
+}
+
+/** Zoom by `factor` about the screen point (px, py): the scan point under it stays under it (then clamped). */
+export function zoomAt(l: MapLayout, v: MapView, factor: number, px: number, py: number): MapView {
+  const zoom = Math.min(MAX_ZOOM, Math.max(1, v.zoom * factor));
+  const k = zoom / v.zoom, cx = l.width / 2, cy = l.height / 2;
+  // drawn = c + (fitted - c) * zoom + pan: keep drawn(p) fixed for the point now at (px, py)
+  return clampView(l, { zoom, panX: px - cx - (px - cx - v.panX) * k, panY: py - cy - (py - cy - v.panY) * k });
+}
+
+export function panBy(l: MapLayout, v: MapView, dx: number, dy: number): MapView {
+  return clampView(l, { ...v, panX: v.panX + dx, panY: v.panY + dy });
+}
+
+/** When zoomed in, pan so the feature at (x_mm, y_mm) is in view (`margin` px inside the edge), else unchanged. */
+export function keepInView(l: MapLayout, v: MapView, x_mm: number, y_mm: number, margin = 40): MapView {
+  if (v.zoom === 1) return v;
+  const [px, py] = toPx(zoomed(l, v), x_mm, y_mm);
+  const inside = px >= margin && px <= l.width - margin && py >= margin && py <= l.height - margin;
+  return inside ? v : clampView(l, { ...v, panX: v.panX + l.width / 2 - px, panY: v.panY + l.height / 2 - py });
 }
 
 /** Smallest distance in px between two feature centres (Infinity for < 2 features). */

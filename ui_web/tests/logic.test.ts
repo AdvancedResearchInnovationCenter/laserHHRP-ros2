@@ -1,7 +1,8 @@
 // Map contract (plan section 9), count circles (9.3) and display wording.
 import { circleModel, circleSize, MAX_CIRCLES } from "../src/lib/circles";
 import { calibrationOutcome, countText, measurementReason, measurementValue, mismatchText, rangeText, REASON_TEXT, STATUS } from "../src/lib/format";
-import { fromPx, layoutMap, MIN_HIT_PX, MIN_SPAN_MM, pick, radiusPx, scaleBar, scanOrder, stepSelection, toPx } from "../src/lib/map";
+import { clampView, FIT_VIEW, fromPx, keepInView, layoutMap, MAX_ZOOM, MIN_HIT_PX, MIN_SPAN_MM, panBy, pick, radiusPx, scaleBar, scanOrder,
+  stepSelection, toPx, zoomAt, zoomed } from "../src/lib/map";
 import { assert, type Test } from "./t";
 
 const P = (x_mm: number, y_mm: number, diameter_mm: number | null = 8) => ({ x_mm, y_mm, diameter_mm });
@@ -18,22 +19,53 @@ export const tests: Test[] = [
     assert.equal(stepSelection(fs, 3, -1), 3, "stops at the first");
     assert.equal(stepSelection([], null, 1), null);
   }],
-  ["map: +x is drawn rightward and +y downward", () => {
+  ["map: +x is drawn leftward and +y upward (the operator's view, the scan starts at the bottom)", () => {
     const l = layoutMap([P(0, 0), P(50, 0), P(0, 80)], 400, 300);
     const [x0, y0] = toPx(l, 0, 0), [x1] = toPx(l, 50, 0), [, y2] = toPx(l, 0, 80);
-    assert.ok(x1 > x0, "larger x must be further right");
-    assert.ok(y2 > y0, "larger y must be further down");
+    assert.ok(x1 < x0, "larger x must be further left");
+    assert.ok(y2 < y0, "larger y must be further up");
   }],
   ["map: one uniform scale on both axes (no distortion)", () => {
     const pts = [P(0, 0), P(100, 0), P(0, 20)];
     const l = layoutMap(pts, 470, 330);
     const [ax, ay] = toPx(l, 0, 0), [bx] = toPx(l, 100, 0), [, cy] = toPx(l, 0, 20);
-    assert.near((bx - ax) / 100, (cy - ay) / 20, 1e-9);
+    assert.near((ax - bx) / 100, (ay - cy) / 20, 1e-9);  // +x left, +y up: screen x and y fall as they grow
   }],
-  ["map: signed y of a backwards scan is kept (negative y above positive)", () => {
+  ["map: signed y of a backwards scan is kept (negative y below the start)", () => {
     const l = layoutMap([P(0, -120), P(0, -20)], 300, 300);
-    assert.ok(toPx(l, 0, -120)[1] < toPx(l, 0, -20)[1]);
-    assert.ok(l.minY < -120, "negative y stays negative");
+    assert.ok(toPx(l, 0, -120)[1] > toPx(l, 0, -20)[1]);
+    assert.ok(l.maxY < 0 && fromPx(l, 0, l.height)[1] < -120, "negative y stays negative");
+  }],
+  ["map zoom: scale grows uniformly; the point under the fingers stays put; zoom 1 cannot pan", () => {
+    const l = layoutMap([P(0, 0), P(0, 540), P(-8, 270)], 470, 330, 26, 46);
+    const v = zoomAt(l, FIT_VIEW, 4, 100, 200);
+    const z = zoomed(l, v);
+    assert.near(z.scale, 4 * l.scale, 1e-9);
+    const [mx, my] = fromPx(l, 100, 200);
+    const [px, py] = toPx(z, mx, my);
+    assert.near(px, 100, 1e-6, "x under the pinch");
+    assert.near(py, 200, 1e-6, "y under the pinch");
+    assert.deepEqual(panBy(l, FIT_VIEW, 50, -30), FIT_VIEW);  // no panning at zoom 1
+    assert.equal(zoomAt(l, FIT_VIEW, 0.5, 10, 10).zoom, 1, "never smaller than the whole scan");
+    assert.equal(clampView(l, { zoom: 999, panX: 0, panY: 0 }).zoom, MAX_ZOOM);
+    const far = clampView(l, { zoom: 2, panX: 1e6, panY: -1e6 });
+    assert.ok(far.panX <= l.width / 2 && far.panY >= -l.height / 2, "cannot pan the scan out of sight");
+  }],
+  ["map zoom: close features become pickable apart; a stepped-to feature is panned into view", () => {
+    const pts = [P(0, 0, 9), P(0, 21, 9)].concat(Array.from({ length: 19 }, (_, i) => P(-(i % 3), 42 + 21 * i, 9)));
+    const l = layoutMap(pts, 470, 330, 26, 46);
+    const [x0, y0] = toPx(l, 0, 0), [, y1] = toPx(l, 0, 21);
+    assert.ok(Math.abs(y1 - y0) < MIN_HIT_PX, "fitted: 21 mm apart is under one tap radius");
+    let v = zoomAt(l, FIT_VIEW, 8, x0, y0);
+    const z = zoomed(l, v);
+    const [zx, zy] = toPx(z, 0, 0), [, zy1] = toPx(z, 0, 21);
+    assert.equal(pick(pts, z, zx, zy), 0);
+    assert.equal(pick(pts, z, zx, zy1), 1, "zoomed in, the next hole is its own target");
+    const last = pts[pts.length - 1];
+    v = keepInView(l, v, last.x_mm, last.y_mm);
+    const [lx, ly] = toPx(zoomed(l, v), last.x_mm, last.y_mm);
+    assert.ok(lx >= 0 && lx <= l.width && ly >= 0 && ly <= l.height, `last feature in view: ${lx}, ${ly}`);
+    assert.deepEqual(keepInView(l, FIT_VIEW, last.x_mm, last.y_mm), FIT_VIEW);  // the fitted view never moves
   }],
   ["map: every feature, including its circle, fits inside the padded view", () => {
     const pts = [P(-15, 15, 9.5), P(15, 265, 9.5), P(0, 140, 4.8)];

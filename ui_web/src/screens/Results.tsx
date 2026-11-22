@@ -44,7 +44,7 @@ export function ScanReview({ scan, failed, mapW = 470, mapH = 330 }: {
   return (
     <div className="review">
       <div className="review-map" ref={mapRef}>
-        <FeatureMap features={features} width={w} height={h} selected={sel} onSelect={setSel} />
+        <FeatureMap key={scan.scan_id} features={features} width={w} height={h} selected={sel} onSelect={setSel} zoomable />
       </div>
       <div className="review-side">
         <div className="review-name">{scan.display_name}</div>
