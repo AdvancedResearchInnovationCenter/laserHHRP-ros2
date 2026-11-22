@@ -47,10 +47,13 @@ def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_di
           warn_after_s: float = 10.0, fail_after_s: float = 120.0, clock: Clock | None = None,
           ros: bool = False, data_root: str | Path | None = None, usb_roots=None, usb=None,
           power_off_command: list[str] | None = None, service_pin_file=None, kiosk_control=None,
-          reboot_command: list[str] | None = None):
+          reboot_command: list[str] | None = None, recording_export: bool = True, bag_dir=None,
+          bag_min_free_gb: float = 5.0):
     """Wire repository, engine, hub, ingress, the event source (mock or ROS) and the app (also for tests).
     `power_off_command`: what the screen's Turn off runs (live ROS only; none = the button is not offered).
-    `service_pin_file` + `kiosk_control`: the developer service menu (kiosk only; both needed)."""
+    `service_pin_file` + `kiosk_control`: the developer service menu (kiosk only; both needed).
+    `recording_export`: with ROS, every scan's features in the legacy layout next to its raw recording.
+    `bag_dir`: where the "Record bags" switch writes (with ROS; default ~/laser_hhrp/bags)."""
     if mock and ros:
         raise ValueError("--mock and the ROS bridge are exclusive")
     clock = clock or Clock()
@@ -65,6 +68,8 @@ def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_di
         mock_ros = MockRos(ingress.submit, speed=mock_speed)
         engine.detector_control = mock_ros
         engine.device = mock_ros
+        from .bag_recorder import FakeBag
+        engine.bag = FakeBag()
     if ros:
         from .detector_supervisor import DetectorSupervisor, RosGraph
         from .ros_bridge import RosBridge
@@ -76,6 +81,18 @@ def build(db: str | Path, mock: bool = False, mock_speed: float = 1.0, static_di
         from .device import RosDevice
         engine.device = RosDevice(lambda: bridge.node, power_off_command, reboot_command=reboot_command)
         services = [bridge, _SupervisorService(supervisor)]   # stop order: supervisor, then bridge
+        if recording_export:
+            from .recording_export import RecordingExport, find_script
+            script = find_script()
+            if script is None:
+                logging.getLogger("laser_hhrp_ui").warning("export_legacy.py not found: no per-feature recording")
+            else:
+                (root / "logs").mkdir(parents=True, exist_ok=True)
+                engine.recording_export = RecordingExport(db, script, root / "logs" / "recording-export.log")
+        from .bag_recorder import BagRecorder
+        (root / "logs").mkdir(parents=True, exist_ok=True)
+        engine.bag = BagRecorder(bag_dir or Path.home() / "laser_hhrp" / "bags", bag_min_free_gb * 1e9,
+                                 log_file=root / "logs" / "bag.log")
     if mock:
         from .device import KioskControl, Service, ServiceAccess
         root = Path(db).parent
@@ -114,6 +131,11 @@ def main(argv=None) -> None:
                     help="command run by the screen's Restart device, e.g. 'systemctl reboot' (default: not offered)")
     ap.add_argument("--service-pin-file", default=None, help="service menu PIN (4-8 digits in this file)")
     ap.add_argument("--kiosk-control", default=None, help="kiosk session request folder (deploy/kiosk)")
+    ap.add_argument("--no-recording-export", action="store_true",
+                    help="no per-feature legacy files next to each scan's raw recording (default: written)")
+    ap.add_argument("--bag-dir", default=None, help="'Record bags' output (default: ~/laser_hhrp/bags)")
+    ap.add_argument("--bag-min-free-gb", type=float, default=5.0,
+                    help="bag recording stops below this much free space (default: %(default)s)")
     ap.add_argument("--log-level", default="info")
     args, _ = ap.parse_known_args(argv)   # tolerate --ros-args from ros2 run
     logging.basicConfig(level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -124,7 +146,9 @@ def main(argv=None) -> None:
                     data_root=args.data_root, usb_roots=args.usb_root,
                     power_off_command=shlex.split(args.power_off_command) if args.power_off_command else None,
                     service_pin_file=args.service_pin_file, kiosk_control=args.kiosk_control,
-                    reboot_command=shlex.split(args.reboot_command) if args.reboot_command else None)
+                    reboot_command=shlex.split(args.reboot_command) if args.reboot_command else None,
+                    recording_export=not args.no_recording_export, bag_dir=args.bag_dir,
+                    bag_min_free_gb=args.bag_min_free_gb)
     logging.getLogger("laser_hhrp_ui").info("database %s, static %s, source %s", args.db, static,
                                             "mock" if args.mock else "ros" if ros else "none")
     import uvicorn

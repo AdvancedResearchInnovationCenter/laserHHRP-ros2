@@ -4,6 +4,10 @@ target feature one folder with each laser line near it as an ASCII PCD, all line
 
     export_legacy.py OUT [--db ~/.local/share/laser_hhrp/ui/ui.db] [--inspection INS-20261122-001]
                          [--scan SCAN_ID] [--half-width-mm 3.0] [--all-features]
+    export_legacy.py DIR --scan SCAN_ID --flat [--meta-only]      # one scan straight into DIR
+
+The operator UI's backend runs the second form after every scan (DIR = the scan's raw recording folder,
+~/laser_hhrp/scans/<date-time>/), and again with --meta-only after the operator's decision (scan.json only).
 
 Needs a sourced ROS workspace with laser_hhrp (to read frames.bin). Reads the operator UI's database (read-only)
 for the scans, their raw recordings and their features; nothing on the device is changed.
@@ -18,7 +22,7 @@ dy = the line's encoder position minus the feature's centre (mm), lines with |dy
 across. Unlike the robot's fixed steps the spacing follows the hand (0.05-0.5 mm); where the roller stood still
 several lines share a dy: their files get _2, _3, ... Each JSON profile also carries the raw per-line record:
 frame_index, time_s, encoder_count, position_mm, direction, accel_mps2, gyro_radps, imu_valid, flags. The laser's
-intensity is not recorded: 1.0 (as in the legacy files).
+intensity is not recorded: 1.0 (as in the legacy files). Every field: docs/DATA_FORMAT.md.
 """
 
 from __future__ import annotations
@@ -98,7 +102,11 @@ def main() -> int:
     ap.add_argument("--scan", help="one scan_id")
     ap.add_argument("--half-width-mm", type=float, default=3.0, help="lines within this of the centre (default 3.0)")
     ap.add_argument("--all-features", action="store_true", help="also non-target features (default: targets)")
+    ap.add_argument("--flat", action="store_true", help="with --scan: write into OUT itself (no inspection/scan folders)")
+    ap.add_argument("--meta-only", action="store_true", help="only refresh the decision in an existing scan.json")
     a = ap.parse_args()
+    if a.flat and not a.scan:
+        ap.error("--flat needs --scan")
 
     db = sqlite3.connect(f"file:{Path(a.db).expanduser()}?mode=ro", uri=True)
     db.row_factory = sqlite3.Row
@@ -118,7 +126,17 @@ def main() -> int:
     out = Path(a.out).expanduser()
     for s in scans:
         raw = Path(s["raw_dir"])
-        dest = out / (s["label"] or s["inspection_uuid"]) / f"Scan-{s['scan_number']:03d}"
+        dest = out if a.flat else out / (s["label"] or s["inspection_uuid"]) / f"Scan-{s['scan_number']:03d}"
+        if a.meta_only:
+            path = dest / "scan.json"
+            if not path.is_file():
+                print(f"{dest}: no scan.json to update")
+                continue
+            meta = json.loads(path.read_text())
+            meta.update({k: s[k] for k in ("decision", "decided_by", "decided_at")})
+            path.write_text(json.dumps(meta, indent=2))
+            print(f"{dest}: decision {s['decision']}")
+            continue
         if not (raw / "frames.bin").is_file():
             print(f"{dest}: skipped, no frames.bin in {raw}")
             continue
@@ -141,7 +159,7 @@ def main() -> int:
                 lines += entry["lines"]
             meta["features"].append(entry)
         dest.mkdir(parents=True, exist_ok=True)
-        (dest / "scan.json").write_text(json.dumps(meta, indent=2))
+        (dest / "scan.json").write_text(json.dumps(meta, indent=2))     # last: its presence marks a whole export
         print(f"{dest}: {sum('folder' in e for e in meta['features'])} features, {lines} lines "
               f"({s['operator_id']}, {s['decision'] or 'undecided'})")
     return 0

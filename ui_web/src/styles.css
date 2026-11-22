@@ -109,6 +109,11 @@ button.big { min-height: 60px; font-size: 20px; padding: 0 24px; }
 @keyframes blink { 50% { opacity: 0.2; } }
 .hdr-insp { font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 330px; }
 .hdr-op { font-weight: 600; padding: 0 4px; }
+.hdr-bag { font-weight: 700; }
+.bag-line { flex: none; font-size: 14px; line-height: 1.3; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bag-line.on { color: var(--bad); font-weight: 600; }
+.bag-line.bad { color: var(--warn); }
+button.bag-on { color: var(--bad); border-color: var(--bad); font-weight: 700; }
 .hdr-alerts { height: 48px; min-width: 64px; border-radius: 0; border: none; font-weight: 700; margin: 0 -2px; }
 .hdr-alerts.warn { background: var(--warn-bg); color: var(--warn); }
 .hdr-alerts.bad { background: var(--bad-bg); color: var(--bad); }

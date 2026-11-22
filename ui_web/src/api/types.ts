@@ -58,6 +58,11 @@ export interface Inspection {
   clock_quality: string; scan_count: number;
 }
 
+export interface BagStatus {
+  available: boolean; enabled: boolean; state: "idle" | "starting" | "recording" | "stopping";
+  name: string | null; bytes: number; error: string | null; free_bytes: number | null;
+}
+
 export interface Alert { code: string; message: string; scan_id: string | null; at: string }
 
 export interface Snapshot {
@@ -77,6 +82,8 @@ export interface Snapshot {
   current_scan: Scan | null; recent_scans: Scan[]; pending_scans: Scan[];
   preview: Preview | null;            // Phase 2 live view: shown, never recorded
   preview_notice: string | null;
+  // the "Record bags" switch: one ros2 bag record -a per scan (backend bag_recorder.py)
+  bag?: BagStatus;
   event_seq?: number;
 }
 

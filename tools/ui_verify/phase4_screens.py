@@ -296,6 +296,17 @@ def run(base: str, browser_exe: str, out: Path) -> int:
         b.click_at(*pos)
         api.wait(lambda s: s["inspection"]["next_expected_count"] == 20, "stepper -1")
         check(True, "ready: +/- steppers change the inspection's expected count")
+        # Record bags (mock recorder): on -> the next scan's bag records, REC in the header; then off again
+        b.tap("Rec bags: Off")
+        api.wait(lambda s: (s.get("bag") or {}).get("state") == "recording", "bag recording", 10)
+        b.wait_text("Recording bag · ")
+        check(b.js("!!document.querySelector('[data-testid=bag-rec]')") and "Scan-001" in api.state()["bag"]["name"],
+              f"ready: Record bags on -> bag {api.state()['bag']['name']}, REC shown")
+        layout_ok(b, "ready (bag recording)")
+        b.shot(out, "05b-ready-bag")
+        b.tap("● Rec bags: On")
+        api.wait(lambda s: not s["bag"]["enabled"] and s["bag"]["state"] == "idle", "bag off", 10)
+        check(not b.js("!!document.querySelector('[data-testid=bag-rec]')"), "ready: Record bags off -> no REC")
 
         # ---- 4 Scanning (switch held) and Finishing Analysis (released, detections still arriving) ----
         api.call("POST", "/dev/mock/press")

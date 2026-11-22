@@ -22,7 +22,8 @@ Key docs: `README.md` (hardware setup and everyday use), `laserHHRP/README.md` a
 (per node), `plan.md` (operator UI execution contract), `handover.md` (UI state as of 2026-11-18),
 `docs/operator_ui/VERIFY_PHASE*.md` (evidence and how to re-check), `ui_backend/README.md` (API v1,
 deviations from plan), `ui_web/README.md` (map contract, layout rules),
-`docs/operator_ui/MEASUREMENT_INTEGRATION.md` (plug-in contract for the measurement algorithms).
+`docs/operator_ui/MEASUREMENT_INTEGRATION.md` (plug-in contract for the measurement algorithms),
+`docs/DATA_FORMAT.md` (what each scan leaves on the device: raw recording + per-feature legacy layout).
 
 ## History in brief
 

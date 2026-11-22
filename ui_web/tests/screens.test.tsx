@@ -40,6 +40,26 @@ export const tests: Test[] = [
     assert.equal(text(cards[0]).trim(), "Countersink Depth");
     assert.equal(text(cards[1]).trim(), "Rivet Flushness");
   }],
+  ["ready: Record bags switch, the bag line, and REC in the header while a bag records", () => {
+    const bag = (o: object) => ({ available: true, enabled: false, state: "idle" as const, name: null, bytes: 0,
+                                  error: null, free_bytes: 30e9, ...o });
+    let m = html(snapshot({ bag: bag({}) }));
+    assert.ok(buttons(m).includes("Rec bags: Off"), "the switch is offered, off");
+    assert.ok(!m.includes('data-testid="bag-rec"') && !m.includes('data-testid="bag-line"'));
+    m = html(snapshot({ bag: bag({ enabled: true, state: "recording", name: "ENG-1042-INS-20261117-001-Scan-004",
+                                   bytes: 340e6 }) }));
+    assert.ok(buttons(m).includes("● Rec bags: On"));
+    assert.includes(text(m), "Recording bag · 340 MB · ENG-1042-INS-20261117-001-Scan-004");
+    assert.includes(m, 'data-testid="bag-rec"');
+    m = html(snapshot({ bag: bag({ enabled: true, state: "starting" }) }));
+    assert.includes(text(m), "wait for “Recording” before scanning");
+    m = html(snapshot({ bag: bag({ error: "stopped: less than 5 GB free" }) }));
+    assert.includes(text(m), "Bag recording off: stopped: less than 5 GB free");
+    m = html(snapshot({ screen: "scanning", bag: bag({ enabled: true, state: "recording", name: "x" }) }));
+    assert.includes(m, 'data-testid="bag-rec"');
+    m = html(snapshot({ bag: bag({ available: false }) }));
+    assert.ok(!buttons(m).some((b) => b.includes("Rec bags")), "no switch without a recorder");
+  }],
   ["ready: hold-the-switch prompt; no on-screen start / stop", () => {
     const m = html(snapshot());
     assert.includes(text(m), "Hold the switch to scan");

@@ -29,6 +29,7 @@ does not forward SIGTERM and would leave the server, and its detector, running.
 | `--data-root` | next to `--db` | `detector-output/<inspection_uuid>/` and `logs/` (detector logs, pidfile) |
 | `--analysis-warn-s` / `--analysis-fail-s` | 10 / 120 | watchdog after switch release |
 | `--static` | installed `share/laser_hhrp_ui/web` if present | built frontend |
+| `--no-recording-export` | off (recording on) | live ROS: no per-feature legacy files after each scan (below) |
 
 **Live ROS.** `ros_bridge.py` subscribes read-only to `scan/status`, `laser/status`, `nano/status`,
 `scan/storage` (readiness) and the tagged identity topics: `scan/session_state` (scan transitions),
@@ -36,6 +37,16 @@ does not forward SIGTERM and would leave the server, and its detector, running.
 It never publishes or calls a service; the untagged `inspection/result` is ignored. Identity subscriptions are
 volatile, so old transitions replayed after a backend restart cannot create scans. The detector runs with
 `tagged:=true`.
+
+**Default recording for experiments and ML** (`recording_export.py`). Once a scan's analysis has ended (complete
+or failed) and its raw recording is closed and verified, `laser_hhrp`'s `export_legacy.py` writes the scan's
+target features in the legacy per-feature layout into the raw recording folder (`~/laser_hhrp/scans/<date-time>/`,
+next to `frames.bin`): `Hole-<id>/` (or `Rivet-<id>/`) with one ASCII PCD per laser line within 3 mm, named by
+its encoder offset `dy`, a `_profiles.json` (each line with `dy`, points and its raw encoder / IMU / time record)
+and `_3d.pcd`; `scan.json` (operator, measurements as labels; the decision is added when it is made). One job at a
+time in its own process at nice 19 / ionice idle; failures are audited (`recording_export_failed`) and never
+touch the scan. Format: `docs/DATA_FORMAT.md`. Written after the scan, not per frame: the feature and its label exist only then, and ~120 small
+files a second on the SD card during a scan would risk the recorder's write failure (a fatal stop).
 
 **Raw recording.** The recorder's session is matched to its scan by the exact stamp of the start transition,
 never by time. When both the session and the scan's frame stream have closed, `frames.bin` is walked record by
@@ -183,6 +194,11 @@ An earlier scan left in results when a new one starts stays `undecided` in histo
   calibrate the gyro (`calibration/start`) and turn the device off (`--power-off-command`), so the device runs
   without a terminal (operator kiosk, `deploy/kiosk/`). Both are refused during a scan, power off also while an
   analysis is pending; `device.py`, tests in `test/test_device.py`. Scan start / stop stays on the switch.
+
+- Plan section 3 (no device control from the web), 2026-11-22: the Ready screen's **Rec bags** switch makes the
+  backend run one `ros2 bag record -a` per scan (`bag_recorder.py`, `POST /api/v1/bag {"enabled": bool}`): it
+  never starts or stops a scan, is refused during a scan or its analysis, and stops itself below 5 GB free
+  (`--bag-dir`, `--bag-min-free-gb`). Off after a restart. Tests `test_bag_*` in `test/test_state.py`.
 
 ## Not yet
 

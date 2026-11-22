@@ -17,6 +17,10 @@ REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "ui_backend"
 
 MUTATIONS = [
+    ("Recording exported before its raw file is verified [recording]", "state.py",
+     'or s["raw_state"] != "closed" or not s["replay_eligible"]):', 'or False):'),
+    ("Recording exported again on every event [recording]", "state.py",
+     "if (s is None or scan_id in self.exported or", "if (s is None or"),
     ("Complete without waiting for all declared results [5.6]", "state.py",
      'if counts["total"] < f.emitted_result_count:\n            return',
      'if False:\n            return'),

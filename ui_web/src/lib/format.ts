@@ -109,3 +109,18 @@ export function calibrationOutcome(message: string, calibrated: boolean): { tone
   if (m.startsWith("gyro calibrated") || calibrated) return { tone: "ok", detail: "", text: "Calibration done." };
   return { tone: "bad", detail: m, text: "Calibration did not finish. Try again." };
 }
+
+/** 1.2 GB / 340 MB */
+export function sizeText(bytes: number): string {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+/** The bag line on Ready: what the "Record bags" switch is doing for the next scan. */
+export function bagText(b: { enabled: boolean; state: string; name: string | null; bytes: number; error: string | null }): string {
+  if (b.error && !b.enabled) return `Bag recording off: ${b.error}`;
+  if (!b.enabled) return "";
+  if (b.state === "recording") return `Recording bag · ${sizeText(b.bytes)} · ${b.name}`;
+  if (b.state === "starting") return "Bag starting… wait for “Recording” before scanning";
+  if (b.state === "stopping") return "Closing the last bag…";
+  return "Bag opens on Ready";
+}

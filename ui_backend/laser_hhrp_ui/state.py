@@ -17,6 +17,7 @@ import uuid as uuidlib
 from dataclasses import dataclass
 
 from . import models, raw_recording
+from .bag_recorder import NullBag
 from .device import NoDevice
 from .clock import Clock, iso
 from .events import (DetectionFinalized, DetectorStatus, HardwareStatus, LegacyResult, MeasurementFinalized,
@@ -60,6 +61,13 @@ class NullDetectorControl:
         pass
 
 
+class NullRecordingExport:
+    """No per-feature recording (tests, mock); the server supplies recording_export.RecordingExport with ROS."""
+
+    def export(self, scan: dict, meta_only: bool = False) -> None:
+        pass
+
+
 class Engine:
     def __init__(self, repo, clock: Clock | None = None, emit=None, detector_control=None,
                  warn_after_s: float = 10.0, fail_after_s: float = 120.0, hardware_stale_s: float = 2.5,
@@ -68,6 +76,12 @@ class Engine:
         self.clock = clock or Clock()
         self.emit = emit or (lambda *a, **k: None)
         self.detector_control = detector_control or NullDetectorControl()
+        self.recording_export = NullRecordingExport()   # per-feature legacy files after each scan, set by the server
+        self.exported: set[str] = set()           # scans handed to recording_export (this run)
+        self.bag = NullBag()                      # ros2 bag record -a per scan (bag_recorder.py), set by the server
+        self.bag_enabled = False                  # the screens' "Record bags" switch (off after a restart)
+        self.bag_scan: tuple[str, int] | None = None   # (inspection uuid, scan number) the running bag is for
+        self._bag_key = None
         self.device = NoDevice()                  # calibration / power off (device.py), set by the server
         self.powering_off = False                 # the operator turned the device off: nothing else is accepted
         self.power_action = "off"                 # "off" or "reboot": what powering_off is doing
@@ -300,7 +314,14 @@ class Engine:
             "pending_scans": [self.scan_view(s) for s in self.repo.scans_where("analysis = 'pending'")],
             "preview": self.preview_view(),
             "preview_notice": PREVIEW_NOTICE if self.preview_mode else None,
+            "bag": self.bag_view(),
         }
+
+    def bag_view(self) -> dict:
+        st = self.bag.status()
+        free = self.bag.free_bytes() if self.bag.available else None
+        return {"available": bool(self.bag.available), "enabled": self.bag_enabled, "state": st["state"],
+                "name": st["name"], "bytes": st["bytes"], "error": st["error"], "free_bytes": free}
 
     def device_view(self) -> dict:
         return {"can_calibrate": bool(self.device.can_calibrate), "can_power_off": bool(self.device.can_power_off),
@@ -651,6 +672,7 @@ class Engine:
                     targets=counts["targets"], expected=expected)
         self._emit_scan("analysis_complete", scan)
         self._emit_system()
+        self._maybe_export(scan_id)
 
     def _fail(self, scan_id: str, reason: str) -> None:
         scan = self.repo.scan(scan_id)
@@ -662,6 +684,20 @@ class Engine:
         self._audit("analysis_failed", scan_id=scan_id, inspection_uuid=scan["inspection_uuid"], reason=reason)
         self._emit_scan("analysis_failed", scan, reason=reason)
         self._emit_system()
+        self._maybe_export(scan_id)
+
+    def _maybe_export(self, scan_id: str) -> None:
+        """Default recording for experiments and ML: once a scan's analysis has ended (its features and
+        measurements final) and its raw recording is closed and verified, whichever comes last."""
+        s = self.repo.scan(scan_id)
+        if (s is None or scan_id in self.exported or s["analysis"] not in (Analysis.COMPLETE.value, Analysis.FAILED.value)
+                or s["raw_state"] != "closed" or not s["replay_eligible"]):
+            return
+        self.exported.add(scan_id)
+        try:
+            self.recording_export.export(s)
+        except Exception as err:      # noqa: BLE001 - a recording side job never breaks the lifecycle
+            self._audit("recording_export_failed", scan_id=scan_id, reason=str(err))
 
     def _on_hardware(self, e: HardwareStatus) -> None:
         prev = self.hardware
@@ -815,6 +851,7 @@ class Engine:
             ok, note = raw_recording.verify(s["raw_dir"], s["raw_frame_count"], s["published_frame_count"])
         self.repo.update_scan(scan_id, replay_eligible=int(ok), raw_note=note)
         self._audit("raw_recording_verified", scan_id=scan_id, replay_eligible=ok, note=note)
+        self._maybe_export(scan_id)
 
     def ingress_overflow(self, dropped: int) -> None:
         """Events were dropped between ROS and the engine: pending results may be incomplete."""
@@ -824,6 +861,10 @@ class Engine:
 
     def tick(self) -> None:
         """Watchdog (plan: warn 10 s, fail 120 s after release; never a fixed-delay success)."""
+        try:
+            self._bag_sync()
+        except Exception as err:      # noqa: BLE001 - never stop the watchdog for a side job
+            self._audit("bag_error", reason=str(err))
         now = self.clock.monotonic()
         for scan_id, rt in list(self.runtime.items()):
             if rt.released_mono is None:
@@ -849,6 +890,67 @@ class Engine:
                 self.orphans[scan_id] = fresh
             else:
                 del self.orphans[scan_id]
+
+    # ------------------------------------------------------------------ bag recording (bag_recorder.py)
+    def set_bag(self, enabled) -> dict:
+        """The "Record bags" switch: one `ros2 bag record -a` per scan while on. Not while a scan runs or is
+        analysed (the running bag belongs to that scan)."""
+        if not isinstance(enabled, bool):
+            raise models.ValidationError("enabled", "enabled must be true or false")
+        if enabled and not self.bag.available:
+            raise CommandError(409, "unavailable", "Bag recording is not available here")
+        if self._pending_work():
+            raise CommandError(409, "scanning", "Not during a scan or its analysis")
+        if enabled:
+            free = self.bag.free_bytes()
+            if free is not None and free < getattr(self.bag, "min_free", 0):
+                raise CommandError(409, "low_storage", f"Less than {self.bag.min_free / 1e9:.0f} GB free")
+        if enabled != self.bag_enabled:
+            self.bag_enabled = enabled
+            self._audit("bag_recording", actor=self._actor(), enabled=enabled)
+        self._bag_sync()
+        self._emit_system()
+        return self.bag_view()
+
+    def _bag_name(self, insp: dict, number: int) -> str:
+        return f"{self.operator['operator_id']}-{insp['label']}-Scan-{number:03d}"
+
+    def _bag_sync(self) -> None:
+        """Called every watchdog tick. The next scan's bag opens on Ready / Not ready (ros2 bag needs 1-3 s to
+        subscribe, so it must run before the press) and closes once that scan's analysis has ended."""
+        st = self.bag.status()
+        if st["error"] and self.bag_enabled:          # stopped itself: low storage or ros2 bag exited
+            self.bag_enabled = False
+            self._alert("bag_stopped", f"Bag recording off: {st['error']}")
+        insp, running = self.inspection, st["state"] in ("starting", "recording")
+        if running and not self.bag_scan:             # not ours to keep (never expected): close it
+            self.bag.stop()
+        elif running and self.bag_scan:
+            uuid, number = self.bag_scan
+            done = not self.bag_enabled or not self.operator or not insp or insp["uuid"] != uuid
+            if not done:
+                last = self.repo.latest_scan_of(uuid)
+                done = bool(last and last["scan_number"] >= number and last["acquisition"] not in ACQUIRING
+                            and last["analysis"] != Analysis.PENDING.value)
+            if done:
+                self.bag.stop()
+                self._audit("bag_closed", inspection_uuid=uuid, name=st["name"], bytes=st["bytes"])
+                self.bag_scan = None
+        elif (not running and st["state"] == "idle" and self.bag_enabled and self.operator and insp
+              and self.screen() in (Screen.READY, Screen.NOT_READY)):
+            number = insp["last_scan_number"] + 1
+            try:
+                self.bag.start(self._bag_name(insp, number))
+                self.bag_scan = (insp["uuid"], number)
+                self._audit("bag_opened", inspection_uuid=insp["uuid"], name=self.bag.status()["name"])
+            except Exception as err:      # noqa: BLE001 - recording is a side job: say why, switch off
+                self.bag_enabled = False
+                self._alert("bag_stopped", f"Bag recording off: {err}")
+        st = self.bag.status()
+        key = (self.bag_enabled, st["state"], st["name"], st["error"], st["bytes"] // 50_000_000)
+        if key != self._bag_key:
+            self._bag_key = key
+            self._emit_system()
 
     # ------------------------------------------------------------------ commands
     def _pending_work(self) -> bool:
@@ -980,6 +1082,11 @@ class Engine:
                     detected=scan["detected_target_count"], count_mismatch=scan["count_mismatch"])
         self._emit_scan("scan_decision", scan)
         self._emit_system()
+        if scan["scan_id"] in self.exported:      # the recording's scan.json carries the decision too
+            try:
+                self.recording_export.export(scan, meta_only=True)
+            except Exception as err:      # noqa: BLE001
+                self._audit("recording_export_failed", scan_id=scan["scan_id"], reason=str(err))
         return self.scan_view(scan)
 
     # ------------------------------------------------------------------ device actions (device.py)

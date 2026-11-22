@@ -38,6 +38,8 @@ export const api = {
   scans: (uuid: string) => call<Scan[]>("GET", `/inspections/${uuid}/scans`),
   scan: (scanId: string) => call<Scan>("GET", `/scans/${scanId}`),
   restartDetector: () => call("POST", "/detector/restart"),
+  // "Record bags": refused during a scan or its analysis, and below the free-space guard
+  setBag: (enabled: boolean) => call("POST", "/bag", { enabled }),
   // the backend refuses both during a scan (and power off while an analysis is pending)
   calibrate: () => call<{ started: boolean; message: string }>("POST", "/device/calibrate"),
   powerOff: () => call<{ powering_off: boolean }>("POST", "/device/power-off"),

@@ -46,6 +46,7 @@ export function Header({ snap, connected, run }: { snap: Snapshot; connected: bo
         </span>
       )}
       <span className="spacer" />
+      {snap.bag?.state === "recording" && <span className="pill bad hdr-bag" data-testid="bag-rec" title={snap.bag.name ?? ""}>● REC</span>}
       {snap.clock_quality === "unverified" && <span className="pill warn">Time not verified</span>}
       {snap.operator && <span className="hdr-op">{snap.operator.operator_id}</span>}
       {items.length > 0 && (

@@ -1,6 +1,7 @@
 """Engine: lifecycle, completion barrier, failures, decisions, recovery (plan sections 4, 5, 8, 11)."""
 
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -839,3 +840,198 @@ def test_zero_target_scan_needs_an_empty_measurement():
     assert h.scan(sid)["analysis"] == "pending"
     h.measure(sid)
     assert h.scan(sid)["analysis"] == "complete" and h.scan(sid)["measurement"]["in_limits"] == 0
+
+
+# ---- default recording: per-feature legacy files after every scan (recording_export.py) ----
+
+class FakeExport:
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    def export(self, scan, meta_only=False):
+        self.calls.append((scan["scan_id"], meta_only))
+        if self.fail:
+            raise OSError("disk full")
+
+
+@pytest.mark.parametrize("closed_first", [True, False])
+def test_recording_exported_once_when_analysis_ended_and_raw_verified(tmp_path, closed_first):
+    h = Harness()
+    h.engine.recording_export = ex = FakeExport()
+    h.ready_inspection(count=1)
+    if closed_first:
+        sid = recorded_scan(h, tmp_path)                  # raw CLOSED, then the analysis completes
+    else:
+        raw = tmp_path / "rec"
+        write_frames_bin(raw, 20)
+        start = (h.seq + 1) * 1000
+        sid = h.press()
+        h.handle(RecordingSession("OPENED", start, "s1", str(raw)))
+        h.release(sid)
+        h.close(sid, 20)
+        h.finalize(sid, 20, emitted=0, targets=0)         # analysis complete before the recorder closes
+        assert ex.calls == [], "not before the raw recording is closed"
+        h.handle(RecordingSession("CLOSED", h.seq * 1000, "s1", str(raw), 20, False))
+    assert h.scan(sid)["analysis"] == "complete"
+    assert ex.calls == [(sid, False)]
+    h.engine._maybe_export(sid)                           # never twice
+    assert ex.calls == [(sid, False)]
+
+
+def test_recording_refreshed_with_the_decision(tmp_path):
+    h = Harness()
+    h.engine.recording_export = ex = FakeExport()
+    h.ready_inspection(count=1)
+    sid = recorded_scan(h, tmp_path)
+    h.engine.decide(sid, "accept")
+    assert ex.calls == [(sid, False), (sid, True)]
+
+
+def test_recording_also_for_a_failed_analysis_never_for_a_bad_raw_file(tmp_path):
+    h = Harness()
+    h.engine.recording_export = ex = FakeExport()
+    h.ready_inspection(count=2)
+    bad = recorded_scan(h, tmp_path / "a", truncate=True)
+    assert h.scan(bad)["analysis"] == "complete" and not h.scan(bad)["replay_eligible"]
+    assert ex.calls == [], "a damaged frames.bin is not exported"
+    raw = tmp_path / "b"
+    write_frames_bin(raw, 20)
+    start = (h.seq + 1) * 1000
+    sid = h.press()
+    h.handle(RecordingSession("OPENED", start, "s2", str(raw)))
+    h.release(sid)
+    h.close(sid, 20)
+    h.handle(RecordingSession("CLOSED", h.seq * 1000, "s2", str(raw), 20, False))
+    h.finalize(sid, 20, success=False, error="detector crashed")
+    assert h.scan(sid)["analysis"] == "failed"
+    assert ex.calls == [(sid, False)]
+
+
+def test_recording_failure_never_touches_the_scan(tmp_path):
+    h = Harness()
+    h.engine.recording_export = FakeExport(fail=True)
+    h.ready_inspection(count=1)
+    sid = recorded_scan(h, tmp_path)
+    assert h.scan(sid)["analysis"] == "complete"
+    assert h.engine.decide(sid, "accept")["decision"] == "accepted"
+    assert len(h.repo.audit_events("recording_export_failed")) == 2       # the export and the decision refresh
+
+
+def test_recording_export_command_runs_last_in_line():
+    from pathlib import Path
+
+    from laser_hhrp_ui.recording_export import RecordingExport
+    ex = RecordingExport("/data/ui.db", Path("/ws/export_legacy.py"))
+    cmd = ex.command("abc", "/scans/20261122-120000", False)
+    assert cmd[:3] == ["nice", "-n", "19"]
+    assert cmd[-7:] == ["/ws/export_legacy.py", "/scans/20261122-120000", "--db", "/data/ui.db", "--scan", "abc", "--flat"]
+    assert ex.command("abc", "/x", True)[-1] == "--meta-only"
+
+
+# ---- "Record bags": one ros2 bag record -a per scan (bag_recorder.py) ----
+
+def test_bag_per_scan_opens_on_ready_closes_after_analysis():
+    from laser_hhrp_ui.bag_recorder import FakeBag
+    h = Harness()
+    h.engine.bag = bag = FakeBag()
+    h.ready_inspection(count=3, operator="ENG-1042", label="INS-20261122-001")
+    h.engine.tick()
+    assert bag.started == [] and bag.state == "idle", "off by default"
+    h.engine.set_bag(True)
+    assert bag.state == "recording" and bag.started == ["ENG-1042-INS-20261122-001-Scan-001"], "opens on Ready"
+    sid = h.press()
+    h.results(sid, 3)
+    h.release(sid)
+    h.engine.tick()
+    assert bag.state == "recording", "kept through the scan and its analysis"
+    h.close(sid, 500)
+    h.finalize(sid, 500)
+    h.engine.tick()
+    assert bag.state == "idle", "closed once the analysis ended"
+    h.engine.tick()
+    assert bag.started == ["ENG-1042-INS-20261122-001-Scan-001"], "the next bag waits for Ready (decision first)"
+    h.engine.decide(sid, "accept")
+    h.engine.tick()
+    assert bag.started[-1] == "ENG-1042-INS-20261122-001-Scan-002" and bag.state == "recording"
+    with pytest.raises(CommandError):
+        h.press()
+        h.engine.set_bag(False)                         # not during a scan
+    h.engine.tick()
+    assert bag.state == "recording"
+
+
+def test_bag_switch_refused_mid_scan_and_stops_on_low_storage():
+    from laser_hhrp_ui.bag_recorder import FakeBag
+    h = Harness()
+    h.engine.bag = bag = FakeBag(free_bytes=4e9)
+    h.ready_inspection(count=1)
+    with pytest.raises(CommandError) as e:
+        h.engine.set_bag(True)
+    assert e.value.code == "low_storage" and not h.engine.bag_enabled
+    bag.free = 30e9
+    h.engine.set_bag(True)
+    bag.error, bag.state = "stopped: less than 5 GB free", "idle"     # the recorder's guard stopped it
+    h.engine.tick()
+    assert not h.engine.bag_enabled and any(a["code"] == "bag_stopped" for a in h.engine.alerts)
+    view = h.engine.snapshot()["bag"]
+    assert view == {**view, "enabled": False, "error": "stopped: less than 5 GB free"}
+
+
+def test_bag_unavailable_without_a_recorder():
+    h = Harness()
+    h.ready_inspection(count=1)
+    with pytest.raises(CommandError) as e:
+        h.engine.set_bag(True)
+    assert e.value.code == "unavailable" and h.engine.snapshot()["bag"]["available"] is False
+
+
+def test_bag_recorder_closes_with_sigint_and_never_overwrites(tmp_path):
+    """The real BagRecorder around a stand-in for ros2 bag: readiness from its output, SIGINT to close."""
+    import sys
+    import time as _t
+    from laser_hhrp_ui.bag_recorder import BagRecorder
+    stub = tmp_path / "fake_bag.py"
+    stub.write_text("import os, signal, sys, time\np = sys.argv[1]\nos.makedirs(p)\nprint('Recording...', flush=True)\n"
+                    "def bye(*a):\n    open(os.path.join(p, 'closed'), 'w').write('ok')\n    sys.exit(0)\n"
+                    "signal.signal(signal.SIGINT, bye)\nwhile True:\n    open(os.path.join(p, 'data'), 'a').write('x' * 1000)\n"
+                    "    time.sleep(0.05)\n")
+    rec = BagRecorder(tmp_path / "bags", min_free_bytes=0, sources=[], command=[sys.executable, str(stub)])
+    for n in range(2):
+        rec.start("ENG-1042-INS-1-Scan-001")
+        end = _t.monotonic() + 10
+        while rec.status()["state"] != "recording" and _t.monotonic() < end:
+            _t.sleep(0.05)
+        assert rec.status()["state"] == "recording"
+        rec.stop()
+        while rec.status()["state"] != "idle" and _t.monotonic() < end + 10:
+            _t.sleep(0.05)
+        assert rec.status()["state"] == "idle"
+    rec.start("ENG-1042-INS-1-Scan-002")                 # the backend stops with a bag open
+    end = _t.monotonic() + 10
+    while rec.status()["state"] != "recording" and _t.monotonic() < end:
+        _t.sleep(0.05)
+    rec.shutdown()
+    assert rec.status()["state"] == "idle" and (tmp_path / "bags" / "ENG-1042-INS-1-Scan-002" / "closed").is_file()
+    names = sorted(p.name for p in (tmp_path / "bags").iterdir() if "002" not in p.name)
+    assert names == ["ENG-1042-INS-1-Scan-001", "ENG-1042-INS-1-Scan-001_2"]
+    assert all((tmp_path / "bags" / n / "closed").is_file() for n in names), "closed cleanly by SIGINT"
+
+
+def test_bag_closed_cleanly_when_the_backend_dies_hard(tmp_path):
+    """Backend killed (no shutdown): the kernel sends the bag SIGINT (PR_SET_PDEATHSIG) and it closes itself."""
+    import subprocess
+    import sys
+    import time as _t
+    stub = tmp_path / "fake_bag.py"
+    stub.write_text("import os, signal, sys, time\np = sys.argv[1]\nos.makedirs(p)\nprint('Recording...', flush=True)\n"
+                    "def bye(*a):\n    open(os.path.join(p, 'closed'), 'w').write('ok')\n    sys.exit(0)\n"
+                    "signal.signal(signal.SIGINT, bye)\nwhile True:\n    time.sleep(0.05)\n")
+    backend = ("import sys, time, os\nsys.path.insert(0, %r)\nfrom laser_hhrp_ui.bag_recorder import BagRecorder\n"
+               "r = BagRecorder(%r, 0, sources=[], command=[sys.executable, %r])\nr.start('Scan-009')\n"
+               "while r.status()['state'] != 'recording': time.sleep(0.05)\nos._exit(0)\n"
+               % (str(Path(__file__).resolve().parents[1]), str(tmp_path / "bags"), str(stub)))
+    subprocess.run([sys.executable, "-c", backend], timeout=30, check=True)
+    end = _t.monotonic() + 10
+    while not (tmp_path / "bags" / "Scan-009" / "closed").is_file() and _t.monotonic() < end:
+        _t.sleep(0.05)
+    assert (tmp_path / "bags" / "Scan-009" / "closed").is_file()

@@ -7,6 +7,8 @@ pydantic major version (laptop pip: v2, Ubuntu 24.04 apt: v1).
 No endpoint starts or stops the physical scan. The /api/v1/dev/mock/* routes exist only when the
 server runs with the mock source, never with the live ROS bridge. /api/v1/device/* are the operator's gyro
 calibration and power off (device.py): refused during a scan, power off also while an analysis is pending.
+/api/v1/bag is the "Record bags" switch (one `ros2 bag record -a` per scan, bag_recorder.py): it never starts
+or stops a scan, and is refused while one runs or is analysed.
 """
 
 from __future__ import annotations
@@ -76,6 +78,10 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         try:
             yield
         finally:
+            try:                          # close a running bag cleanly before the process goes away
+                await loop.run_in_executor(None, getattr(engine.bag, "shutdown", lambda: None))
+            except Exception:
+                log.exception("closing the bag failed")
             for svc in reversed(started):
                 try:
                     await loop.run_in_executor(None, svc.stop)
@@ -138,6 +144,14 @@ def create_app(engine, hub, ingress, mock=None, static_dir: str | Path | None = 
         except models.ValidationError as e:
             return _error(400, "invalid", e.message, e.field)
         return await _run(engine.set_next_expected_count, uuid, body.get("count"))
+
+    @app.post(P + "/bag")
+    async def bag(request: Request):
+        try:
+            body = await _body(request)
+        except models.ValidationError as e:
+            return _error(400, "invalid", e.message, e.field)
+        return await _run(engine.set_bag, body.get("enabled"))
 
     @app.post(P + "/detector/restart")
     async def restart_detector():

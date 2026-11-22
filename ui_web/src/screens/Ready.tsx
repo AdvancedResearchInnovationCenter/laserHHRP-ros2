@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { Snapshot } from "../api/types";
-import { countText, statusOf, TARGET_NOUN } from "../lib/format";
+import { bagText, countText, statusOf, TARGET_NOUN } from "../lib/format";
 import { CalibrateDialog } from "../ui/Device";
 import { Keypad } from "../ui/Keyboard";
 import { Confirm, Modal } from "../ui/Modal";
@@ -34,6 +34,8 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
   const last = snap.recent_scans[0];
   const others = snap.pending_scans.filter((s) => s.inspection_uuid === insp.uuid);
   const detectorProblem = !snap.detector.ready && !!snap.detector.error;
+  const bag = snap.bag;
+  const bagLine = bag?.available ? bagText(bag) : "";
 
   return (
     <div className="screen ready-screen">
@@ -60,6 +62,10 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
           </>
         )}
         </div>
+        {bagLine && (
+          <div className={`bag-line ${bag!.error && !bag!.enabled ? "bad" : bag!.state === "recording" ? "on" : ""}`}
+               data-testid="bag-line">{bagLine}</div>
+        )}
         {others.length > 0 && (
           <div className="pending-note">{others.map((s) => s.display_name).join(", ")} still analyzing</div>
         )}
@@ -87,6 +93,12 @@ export function Ready({ snap, run, openHistory }: { snap: Snapshot; run: Run; op
       <div className="bar">
         <button className="secondary" onClick={openHistory}>History ({insp.scan_count})</button>
         <span className="spacer" />
+        {bag?.available && (
+          <button className={bag.enabled ? "secondary bag-on" : "secondary"} aria-pressed={bag.enabled}
+                  data-testid="bag-toggle" onClick={() => void run(api.setBag(!bag.enabled))}>
+            {bag.enabled ? "● Rec bags: On" : "Rec bags: Off"}
+          </button>
+        )}
         {canCalibrate && (
           <button className="secondary" disabled={calibrating} onClick={() => setCalibrate(true)}>Calibrate gyro</button>
         )}
