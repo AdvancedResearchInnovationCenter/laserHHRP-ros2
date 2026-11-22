@@ -991,13 +991,16 @@ def test_bag_recorder_closes_with_sigint_and_never_overwrites(tmp_path):
     import time as _t
     from laser_hhrp_ui.bag_recorder import BagRecorder
     stub = tmp_path / "fake_bag.py"
-    stub.write_text("import os, signal, sys, time\np = sys.argv[1]\nos.makedirs(p)\nprint('Recording...', flush=True)\n"
+    stub.write_text("import os, signal, sys, time\np = sys.argv[1]\nos.makedirs(p)\nprint('Recording...', flush=True)\ntime.sleep(0.3)\n"
+                    "for t in ('/laser/raw', '/nano/encoder', '/nano/imu'): print(f\"Subscribed to topic '{t}'\", flush=True)\n"
                     "def bye(*a):\n    open(os.path.join(p, 'closed'), 'w').write('ok')\n    sys.exit(0)\n"
                     "signal.signal(signal.SIGINT, bye)\nwhile True:\n    open(os.path.join(p, 'data'), 'a').write('x' * 1000)\n"
                     "    time.sleep(0.05)\n")
     rec = BagRecorder(tmp_path / "bags", min_free_bytes=0, sources=[], command=[sys.executable, str(stub)])
     for n in range(2):
         rec.start("ENG-1042-INS-1-Scan-001")
+        _t.sleep(0.15)
+        assert rec.status()["state"] == "starting", "'Recording...' alone is not ready (Jazzy prints it first)"
         end = _t.monotonic() + 10
         while rec.status()["state"] != "recording" and _t.monotonic() < end:
             _t.sleep(0.05)
@@ -1026,6 +1029,7 @@ def test_bag_closed_cleanly_when_the_backend_dies_hard(tmp_path):
     import time as _t
     stub = tmp_path / "fake_bag.py"
     stub.write_text("import os, signal, sys, time\np = sys.argv[1]\nos.makedirs(p)\nprint('Recording...', flush=True)\n"
+                    "for t in ('/laser/raw', '/nano/encoder', '/nano/imu'): print(f\"Subscribed to topic '{t}'\", flush=True)\n"
                     "def bye(*a):\n    open(os.path.join(p, 'closed'), 'w').write('ok')\n    sys.exit(0)\n"
                     "signal.signal(signal.SIGINT, bye)\nwhile True:\n    time.sleep(0.05)\n")
     backend = ("import sys, time, os\nsys.path.insert(0, %r)\nfrom laser_hhrp_ui.bag_recorder import BagRecorder\n"

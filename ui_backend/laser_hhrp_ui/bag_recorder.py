@@ -24,7 +24,10 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-READY_MARKERS = ("Recording", "Subscribed to topic", "Listening for topics")
+# Ready = subscribed to the raw sensor topics. Jazzy prints "Recording..." ~1 s before its subscriptions, so that
+# line alone would show REC too early (2026-11-22 on the Pi: /laser/raw 1.1 s later).
+REQUIRED_TOPICS = ("/laser/raw", "/nano/encoder", "/nano/imu")
+READY_FALLBACK_S = 10.0           # a topic that never appears (device not connected) must not hang the switch
 
 
 def _die_with_parent() -> None:
@@ -88,6 +91,8 @@ class BagRecorder:
         self.proc: subprocess.Popen | None = None
         self.state, self.name, self.path, self.bytes, self.error = "idle", None, None, 0, None
         self.closing = False            # the backend is stopping: no new bag
+        self.required = REQUIRED_TOPICS
+        self.started_at = 0.0
         threading.Thread(target=self._monitor, name="bag-monitor", daemon=True).start()
 
     # ---- queries (engine thread) ----
@@ -126,6 +131,7 @@ class BagRecorder:
                                          stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True,
                                          text=True, bufsize=1, preexec_fn=_die_with_parent)
             self.state, self.name, self.path, self.bytes, self.error = "starting", path.name, path, 0, None
+            self.started_at = time.monotonic()
             threading.Thread(target=self._read_output, args=(self.proc,), daemon=True).start()
         log.info("bag %s: started", path)
 
@@ -173,18 +179,24 @@ class BagRecorder:
 
     def _read_output(self, proc: subprocess.Popen) -> None:
         out = open(self.log_file, "a") if self.log_file else None
+        missing, started = set(self.required), time.monotonic()
         try:
             for line in proc.stdout:
                 if out:
                     out.write(line)
                     out.flush()
-                if any(m in line for m in READY_MARKERS):
-                    with self.lock:
-                        if self.proc is proc and self.state == "starting":
-                            self.state = "recording"
+                if "Subscribed to topic" in line:
+                    missing = {t for t in missing if f"'{t}'" not in line}
+                if not missing or time.monotonic() - started > READY_FALLBACK_S:
+                    self._mark_ready(proc)
         finally:
             if out:
                 out.close()
+
+    def _mark_ready(self, proc: subprocess.Popen) -> None:
+        with self.lock:
+            if self.proc is proc and self.state == "starting":
+                self.state = "recording"
 
     def _size(self) -> int:
         try:
@@ -201,6 +213,8 @@ class BagRecorder:
                 continue
             size = self._size()
             code = proc.poll()
+            if state == "starting" and time.monotonic() - self.started_at > READY_FALLBACK_S:
+                self._mark_ready(proc)     # no output for a while: do not leave the screen waiting
             with self.lock:
                 if self.proc is not proc:
                     continue
