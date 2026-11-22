@@ -87,6 +87,7 @@ class BagRecorder:
         self.lock = threading.Lock()
         self.proc: subprocess.Popen | None = None
         self.state, self.name, self.path, self.bytes, self.error = "idle", None, None, 0, None
+        self.closing = False            # the backend is stopping: no new bag
         threading.Thread(target=self._monitor, name="bag-monitor", daemon=True).start()
 
     # ---- queries (engine thread) ----
@@ -107,6 +108,8 @@ class BagRecorder:
         with self.lock:
             if self.state != "idle":
                 raise RuntimeError(f"a bag is {self.state}")
+            if self.closing:
+                raise RuntimeError("the software is stopping")
             free = self.free_bytes()
             if free is not None and free < self.min_free:
                 raise RuntimeError(f"less than {self.min_free / 1e9:.0f} GB free")
@@ -137,6 +140,7 @@ class BagRecorder:
     def shutdown(self, timeout: float = 25.0) -> None:
         """The backend is stopping: close the running bag and wait until it is written (metadata included)."""
         with self.lock:
+            self.closing = True
             proc = self.proc
         if proc is None:
             return

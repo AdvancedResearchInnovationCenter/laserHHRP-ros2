@@ -1012,6 +1012,8 @@ def test_bag_recorder_closes_with_sigint_and_never_overwrites(tmp_path):
         _t.sleep(0.05)
     rec.shutdown()
     assert rec.status()["state"] == "idle" and (tmp_path / "bags" / "ENG-1042-INS-1-Scan-002" / "closed").is_file()
+    with pytest.raises(RuntimeError):
+        rec.start("ENG-1042-INS-1-Scan-003")             # no new bag once the backend is stopping
     names = sorted(p.name for p in (tmp_path / "bags").iterdir() if "002" not in p.name)
     assert names == ["ENG-1042-INS-1-Scan-001", "ENG-1042-INS-1-Scan-001_2"]
     assert all((tmp_path / "bags" / n / "closed").is_file() for n in names), "closed cleanly by SIGINT"
