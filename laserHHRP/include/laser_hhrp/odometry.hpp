@@ -50,6 +50,10 @@ struct OdometrySettings {
   int slip_samples = 3;               // consecutive rejected encoder samples -> slipping
   int recover_samples = 10;           // consecutive accepted samples -> slip over
   double lookback_s = 0.3;            // on slip, encoder distance of this past replaced by the IMU's
+  double max_slip_s = 1.0;            // a "slip" longer than this is the filter's speed gone wrong, not the
+                                      // roller (2026-11-22 rolls: residual tilt/bias error; without this it
+                                      // never recovered and the pose ran off by km): speed re-anchored to the
+                                      // encoder, slip over. 0 = never.
 };
 
 struct OdometryPose {
@@ -60,6 +64,7 @@ struct OdometryPose {
   bool slipping = false;       // encoder rejected: roller turning without the base moving
   double slip_m = 0;           // encoder distance rejected so far (diagnostics)
   bool still = false;          // device at rest
+  int reanchors = 0;           // slips that outlasted max_slip_s: filter speed reset to the encoder (diagnostics)
 };
 
 class Odometry {
@@ -121,7 +126,10 @@ class Odometry {
     P_[1][1] += s_.bias_walk_mps2 * s_.bias_walk_mps2 * dt;
     if (pose_.still) update(0.0, 1e-6);  // zero-velocity update
     // Without a trusted encoder the filter's speed moves the base.
-    if (!encoder_trusted_) advance(v_ * dt, x_w);
+    if (!encoder_trusted_) {
+      advance(v_ * dt, x_w);
+      if (pose_.slipping) slip_.add(-v_ * dt, x_w);   // undone if the slip turns out to be the filter's error
+    }
     pose_.speed_mps = v_;
     pose_.orientation = base_orientation();
   }
@@ -155,9 +163,29 @@ class Odometry {
       rejected_ = rejected_ + 1;
       accepted_ = 0;
       pose_.slip_m += std::fabs(ds);
+      const Vec3 x_w = mul(quat_to_mat(base_orientation()), Vec3{1, 0, 0});
       if (rejected_ >= s_.slip_samples && !pose_.slipping) {
         pose_.slipping = true;
+        slip_start_ns_ = t_ns;
+        slip_ = Track();
         undo_recent(t_ns);  // the slip began before it was certain
+      }
+      if (pose_.slipping) slip_.add(ds, x_w);
+      if (pose_.slipping && s_.max_slip_s > 0 && (t_ns - slip_start_ns_) * 1e-9 > s_.max_slip_s) {
+        // The encoder kept turning smoothly for max_slip_s against the filter: the filter is wrong. The slip's
+        // distance becomes the encoder's again.
+        restore(slip_);
+        slip_ = Track();
+        v_ = v_enc;
+        b_ = 0;
+        P_[0][0] = r;
+        P_[0][1] = P_[1][0] = 0;
+        P_[1][1] = 0.05 * 0.05;
+        pose_.slipping = false;
+        encoder_trusted_ = true;
+        rejected_ = accepted_ = 0;
+        ++pose_.reanchors;
+        return;
       }
       encoder_trusted_ = false;  // the IMU speed moves the base meanwhile
       return;
@@ -214,6 +242,7 @@ class Odometry {
     for (Recent& r : recent_) {
       if (r.t_ns == 0 || now_ns - r.t_ns > static_cast<int64_t>(s_.lookback_s * 1e9)) continue;
       advance(-r.excess_m, r.x_w);
+      if (pose_.slipping) slip_.add(r.excess_m, r.x_w);
       pose_.slip_m += std::fabs(r.excess_m);
       r = Recent();
     }
@@ -222,6 +251,17 @@ class Odometry {
     pose_.distance_m += ds;
     pose_.position_m = add(pose_.position_m, scale(x_w, ds));
   }
+  /// What a slip changed in the pose, to be put right if the slip is judged false: the encoder distance it
+  /// rejected and the filter distance it added instead (sum of ds and of x_w * ds).
+  struct Track {
+    double ds = 0;
+    Vec3 p{0, 0, 0};
+    void add(double d, const Vec3& x_w) { ds += d; p = Vec3{p[0] + x_w[0] * d, p[1] + x_w[1] * d, p[2] + x_w[2] * d}; }
+  } slip_;
+  void restore(const Track& t) {
+    pose_.distance_m += t.ds;
+    pose_.position_m = add(pose_.position_m, t.p);
+  }
 
   OdometrySettings s_;
   Extrinsics e_;
@@ -229,6 +269,7 @@ class Odometry {
   Mat3 imu_from_base_ = identity3();
   Quat q_wi_{1, 0, 0, 0};  // IMU -> world
   double v_ = 0, b_ = 0;
+  int64_t slip_start_ns_ = 0;
   double P_[2][2] = {{1e-4, 0}, {0, 0.0025}};
   double still_s_ = 0, encoder_still_s_ = 0;
   bool has_count_ = false, encoder_trusted_ = true;

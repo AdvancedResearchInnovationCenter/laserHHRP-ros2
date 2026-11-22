@@ -69,6 +69,9 @@ encoder(count, t):                       dt skipped if <= 0 or > 0.5 s
     y = v_enc − v ;  nis = y²/(P00 + r)
     slip sample if (nis > 25 and |y| > 0.01) or |y| > 0.05:
         3 in a row -> slipping, undo the last 0.3 s of encoder distance (replace by the filter's)
+        slipping for over max_slip_s (1 s): the filter's speed is what went wrong: v = v_enc, b = 0,
+            P reset, slip over (reanchors + 1). Without it a drifted speed never recovered (2026-11-22:
+            the pose ran off by km on 0.5 m rolls)
         encoder not trusted (IMU speed moves the base)
     else (accepted):
         while slipping and < 10 accepted in a row: update(v_enc, r) only
@@ -96,3 +99,13 @@ update(z, r):                            H = [1, 0]
 
 `OdometryNode::follow_calibration/on_imu/publish_slip`, `to_ros()`; `Odometry::configure/imu/
 encoder/update/undo_recent/advance/zero`; `laser_pose()` (pose.hpp).
+
+## Known limitation (2026-11-22)
+
+On the hand-held rolls of 2026-11-22 the filter's IMU speed drifted from the encoder's many times per scan
+(about 0.5 m/s² unexplained forward acceleration) although the encoder was right (hole pitch and roundness):
+10–20 false slips per scan even with the re-anchoring. So the operator warning is off
+(`system.slip_warning: false`, scan_controller) and `base/pose` / `scan/pose` are not to be trusted until the filter
+is validated against a known motion. Frame positions (the scan axis of every detection and measurement) come from
+the encoder alone and are not affected. Replay harness: feed the bag's `imu/corrected` and `nano/encoder` in Nano
+time order to `Odometry::encoder/imu`.

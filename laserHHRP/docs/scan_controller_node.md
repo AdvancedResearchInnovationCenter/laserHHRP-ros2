@@ -32,6 +32,7 @@ Source: `src/scan_controller_node.cpp`, rules in `include/laser_hhrp/monitor_rul
 | `speed.min_speed_mps` | 0.001 | stall threshold |
 | `speed.stall_timeout_s` | 2.0 | |
 | `system.tilt_limit_rad` | 0.087 | |
+| `system.slip_warning` | true (hhrp.yaml: false) | `odometry/slipping` raises the "roller slip" warning; off while the odometry gives false slips (docs/odometry_node.md) |
 | `system.vibration_limit_radps` | 1.0 | |
 | `system.storage_min_free_mb` | 500.0 | |
 

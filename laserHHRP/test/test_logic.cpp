@@ -12,6 +12,7 @@
 #include "laser_hhrp/gyro_calibrator.hpp"
 #include "laser_hhrp/measurement_input.hpp"
 #include "laser_hhrp/monitor_rules.hpp"
+#include "laser_hhrp/odometry.hpp"
 #include "laser_hhrp/scanner_clock.hpp"
 #include "laser_hhrp/serial_protocol.hpp"
 #include "laser_hhrp/software_pairer.hpp"
@@ -255,4 +256,77 @@ TEST(MeasurementInput, LimitsAreInclusive) {
   EXPECT_TRUE(within_limits(-0.00015, -0.00015, 0.00005));
   EXPECT_FALSE(within_limits(0.00006, -0.00015, 0.00005));
   EXPECT_FALSE(within_limits(std::nan(""), -1, 1));
+}
+
+namespace {
+// Level IMU (base = IMU), 240 Hz samples, encoder 5.33e-5 m per count.
+Extrinsics level_extrinsics() {
+  Extrinsics e;
+  e.calibrated = true;
+  e.metres_per_count = 5.33063582e-05;
+  return e;
+}
+// Rolls at speed_mps for seconds with a forward accelerometer error of accel_error (gravity leak, bias);
+// imu_moves: the IMU feels the roll's start (false: roller spun, device at rest). Returns slip changes.
+int roll(Odometry& o, double seconds, double speed_mps, double accel_error, int64_t& t, double& count) {
+  int changes = 0;
+  bool was = o.pose().slipping;
+  for (int i = 0; i < static_cast<int>(seconds * 240); ++i) {
+    t += 4166667;
+    count += speed_mps / 240 / 5.33063582e-05;
+    o.encoder(static_cast<int32_t>(std::lround(count)), t);
+    o.imu({0, 0, 0.001}, {accel_error, 0, 9.80665}, t);
+    changes += o.pose().slipping != was;
+    was = o.pose().slipping;
+  }
+  return changes;
+}
+}  // namespace
+
+TEST(Odometry, RollerSpunWithoutMotionIsASlip) {
+  Odometry o;
+  o.configure(level_extrinsics());
+  int64_t t = 0;
+  double count = 0;
+  roll(o, 1.0, 0.0, 0.0, t, count);                    // at rest
+  // The roller turns at 50 mm/s within one sample while the IMU feels nothing: not a roll.
+  for (int i = 0; i < 24; ++i) {
+    t += 4166667;
+    count += 0.05 / 240 / 5.33063582e-05;
+    o.encoder(static_cast<int32_t>(std::lround(count)), t);
+    o.imu({0, 0, 0}, {0, 0, 9.80665}, t);
+  }
+  EXPECT_TRUE(o.pose().slipping);
+  EXPECT_LT(o.pose().distance_m, 0.002);                 // the counts added no distance
+}
+
+TEST(Odometry, DriftedSpeedIsReanchoredNotARunaway) {
+  // The filter's speed knocked far off the encoder's (an IMU shock: 3 m/s^2 for 0.2 s) while the roll goes on at
+  // 20 mm/s and the hand keeps the gyro busy (no rest update). Every encoder sample then looks like slip: before
+  // max_slip_s the filter never came back and its speed moved the pose (2026-11-22: km off on 0.5 m rolls).
+  auto run = [](double max_slip_s, double& distance) {
+    OdometrySettings s;
+    s.max_slip_s = max_slip_s;
+    Odometry o(s);
+    o.configure(level_extrinsics());
+    int64_t t = 0;
+    double count = 0;
+    for (int i = 0; i < 240 * 10; ++i) {
+      t += 4166667;
+      count += 0.02 / 240 / 5.33063582e-05;
+      const double shock = (i >= 240 && i < 288) ? 3.0 : 0.0;
+      o.encoder(static_cast<int32_t>(std::lround(count)), t);
+      o.imu({0.0, 0.0, 0.2}, {shock, 0, 9.80665}, t);
+    }
+    distance = o.pose().distance_m;
+    return o.pose();
+  };
+  double d_new = 0, d_old = 0;
+  const OdometryPose fixed = run(1.0, d_new);
+  EXPECT_GE(fixed.reanchors, 1);
+  EXPECT_FALSE(fixed.slipping);
+  EXPECT_NEAR(d_new, 0.2, 0.03);                             // 10 s at 20 mm/s
+  const OdometryPose old = run(0.0, d_old);
+  EXPECT_TRUE(old.slipping);                                 // the failure this guards against
+  EXPECT_GT(std::fabs(d_old - 0.2), 1.0);
 }

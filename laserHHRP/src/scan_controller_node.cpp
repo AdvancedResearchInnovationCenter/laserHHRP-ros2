@@ -48,6 +48,7 @@ class ScanControllerNode : public rclcpp::Node {
     declare_parameter("system.tilt_limit_rad", 0.087);
     declare_parameter("system.vibration_limit_radps", 1.0);
     declare_parameter("system.storage_min_free_mb", 500.0);
+    declare_parameter("system.slip_warning", true);
 
     command_pub_ = create_publisher<Command>("nano/command", 10);
     status_pub_ = create_publisher<Status>("scan/status", 10);
@@ -227,7 +228,7 @@ class ScanControllerNode : public rclcpp::Node {
     in.min_free_mb = get_parameter("system.storage_min_free_mb").as_double();
     in.storage_write_failed = storage_.write_failed;
     in.calibrated = calibration_.state == Calibration::CALIBRATED;
-    in.slipping = slipping_;
+    in.slipping = slipping_ && get_parameter("system.slip_warning").as_bool();
     faults_ = evaluate(in);
     for (const Fault& f : faults_) {
       if (f.severity == Severity::FATAL && active()) {
