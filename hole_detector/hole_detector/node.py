@@ -1,5 +1,11 @@
 """ROS 2 node: holes (top rim) from the scanner's profiles (/scan/frame) or its cumulative cloud, published once each."""
 
+import os
+# One BLAS thread: the fits here are small, and a thread per core (OpenBLAS's default) made each detection cycle
+# 2.5x slower on an idle machine and up to 10x under the stack's load (2026-11-22 replays: 1-3.7 s per cycle, the
+# live count trailing the laser by ~8 s). Before numpy is imported anywhere in this process.
+for _var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
 import threading
 from collections import deque
 import time
