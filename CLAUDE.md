@@ -42,7 +42,9 @@ deviations from plan), `ui_web/README.md` (map contract, layout rules),
 - **11-22** Whole stack tested on four bags recorded on the Pi (`VERIFY_REAL_BAGS.md`, `handover.md` §0): rivets
   found by their seam (were 6/41, now 41/41), field-edge / final-pass fixes, flushness z check off, odometry
   re-anchoring, one BLAS thread (live count), no false speed / vibration / slip warnings, Results stepper and
-  Accept / Rescan hint; replay tool `tools/replay/` (laptop, Pi, with a browser or a person as operator).
+  Accept / Rescan hint; replay tool `tools/replay/` (laptop, Pi, with a browser or a person as operator). The user
+  operated all four bags on the Pi; then `scan_distorted` for a feature the device rocked over (`a4c37c3`) and the
+  map in the operator's view (+x left, +y up) with zoom / pan on Results (`a60276f`).
 
 ## Branches and process
 
@@ -172,5 +174,9 @@ features get reason `partial`. A wrong `inspection.*_invert_z` shows as `unexpec
   sparse stripe. Empty runs along the scan under 3 mm are dropout, not gaps (rivet detector).
 - `pkill -f <pattern>` / `pgrep -f` from a tool shell match that shell's own command line: bracket one character
   (`hhrp-ui-browse[r]`). Browser checks can leave headless browsers and ~130 MB profiles in the temp folder.
+- The Results map is the operator's view from behind the device: +x **left**, +y **up** (laser +x is the operator's
+  left, checked on the device 2026-11-22); `plan.md` §9 still says x right / y down (deviation noted there).
+- `tools/replay/replay_stack.sh` starts the backend without Turn off / Restart / Service PIN, so its screens show
+  no ⋮ menu (on purpose: a test run cannot power off the Pi). The kiosk has it.
 - The odometry pose (`base/pose`, `scan/pose`) is not trustworthy yet; nothing measured uses it
   (`docs/odometry_node.md`, known limitation). The slip warning is off in `hhrp.yaml`.

@@ -21,11 +21,18 @@ Where it stands:
 - **Full pipeline** (core without drivers + backend + detector + measurement, `tools/replay/replay_stack.sh`):
   all 8 scans meet their counts on the laptop and on the Pi (Pi: detect ~190 ms per cycle, replay within 0.1 s).
 - **Measurement**: CSK depth 1.14-1.24 mm on that row (NO-GO; repeatability ~0.012 mm per scan; absolute level needs
-  a gauge reading). Flushness 28/41 measured, all GO (sunk 0-0.056 mm); `rivet_check_orientation: false`.
+  a gauge reading). Flushness 28/41 measured, all GO (sunk 0-0.056 mm); `rivet_check_orientation: false`. A feature
+  the device rocked over (roller stopped while it tipped: holes2 hole 5) is `scan_distorted` ("Scan distorted:
+  rescan"), no value: `inspection_node` checks the lines crossing it for a height jump > 0.1 mm
+  (`inspection.max_line_jump_m`; good features ≤ 0.031 mm, that hole 0.30 mm).
 - **Screens**: driven by a browser operator on the replayed stack (`UX=1`, or `UX=external` + `tools/replay/ux_operator.py`
-  through `ssh -L 8099`), and by the user on the Pi's own screen (5 rivet scans, all correct). Fixed from that: live
-  count lag (one BLAS thread), false speed / vibration / roller-slip warnings, ‹ › stepper on Results, a line saying
-  what Accept / Rescan do.
+  through `ssh -L 8099`), and by the user on the Pi's own screen: all four bags (8 scans), every count right, values
+  equal to the laptop runs within 0.003 mm. Fixed from that: live count lag (one BLAS thread), false speed /
+  vibration / roller-slip warnings, ‹ › stepper on Results, a line saying what Accept / Rescan do, and the map: now
+  the operator's view from behind the device (+x left, +y up, the scan's start at the bottom; confirmed by the user
+  on the device) with pinch / + / − / Fit zoom and drag on Results (`ui_web/README.md` map contract).
+- **Not tried on real data**: a backward roll (detectors and map handle -y; tests synthetic only). The user does
+  not need it now (positions are local per scan).
 
 Open, in order of value:
 1. One gauge reading of a countersink on the test row: CSK depths read ~0.06 mm above the GO maximum, consistently.
