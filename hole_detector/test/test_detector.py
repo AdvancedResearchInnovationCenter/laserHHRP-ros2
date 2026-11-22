@@ -5,6 +5,7 @@ Run in the ROS container:  python3 /bags/hole_detector/test/test_detector.py
 
 import csv
 import importlib.util
+import os
 import sys
 import time
 from pathlib import Path
@@ -652,6 +653,89 @@ def test_write_failure_fails_the_scan(tmp=Path("/tmp/hole_detector_write_fail_te
             (tmp / "scan-read-only").chmod(0o755)
         shutil.rmtree(tmp, ignore_errors=True)
 
+
+# ---- Rows scanned on the Pi 2026-11-22 (bags pi_20261122/: rivets, rivets2, holes1, holes2; ~2.2 GB, not in the
+# repo). Centres along the scan (mm) read off the scans' height maps, one per feature. HHRP_BAGS points at the
+# folder holding pi_20261122/ (default: the repo's parent).
+ROWS_20261122 = Path(os.environ.get("HHRP_BAGS", DATA.parent)) / "pi_20261122"
+RIVET_ROWS = {   # (bag, scan number in the bag): rivet centres (y, mm)
+    ("rivets", 0): [8, 30, 72, 94, 115], ("rivets", 1): [7, 28, 50, 92, 113, 134],
+    ("rivets", 2): [22, 43, 64, 106, 128, 149], ("rivets", 3): [18], ("rivets", 4): [16, 37, 58, 100, 121],
+    ("rivets2", 0): [35, 56, 78, 120, 141, 163, 205, 226, 248, 290, 311, 333, 375, 396, 417, 459, 480, 501]}
+HOLE_ROWS = {    # countersunk holes; holes1's last one runs out of the laser's field (partial)
+    ("holes1", 0): [11.4, 32.7, 53.8, 96.3, 117.6, 139.0, 181.6, 203.0, 224.4, 266.9, 288.1, 309.4, 351.6, 372.8,
+                    392.4],
+    ("holes2", 0): [15.9, 37.1, 58.3, 100.3, 121.3, 142.5, 184.7, 205.9, 227.2, 269.7, 290.8, 311.9, 354.0, 375.1,
+                    396.4, 438.7, 460.2, 481.6, 522.8, 543.6]}
+
+
+def bag_scans(bag):
+    """The scans of a bag's /scan/frame, as lists of ScanFrame (a new scan at frame index 0; frames before the
+    first index 0 are left out). Jazzy bags: Humble's rosbag2 cannot read their metadata, so the file is opened."""
+    import rosbag2_py
+    from rclpy.serialization import deserialize_message
+    from laser_hhrp.msg import ScanFrame
+    reader = rosbag2_py.SequentialReader()
+    try:
+        reader.open(rosbag2_py.StorageOptions(uri=str(bag), storage_id="mcap"),
+                    rosbag2_py.ConverterOptions("cdr", "cdr"))
+    except Exception:
+        reader = rosbag2_py.SequentialReader()
+        reader.open(rosbag2_py.StorageOptions(uri=str(next(Path(bag).glob("*.mcap"))), storage_id="mcap"),
+                    rosbag2_py.ConverterOptions("cdr", "cdr"))
+    reader.set_filter(rosbag2_py.StorageFilter(topics=["/scan/frame"]))
+    scans = []
+    while reader.has_next():
+        frame = deserialize_message(reader.read_next()[1], ScanFrame)
+        if frame.index == 0:
+            scans.append([])
+        if scans:
+            scans[-1].append(frame)
+    return scans
+
+
+def replay_scan(frames, every):
+    """The node's tagged path: frames into FrameCloud, one detection cycle per `every` frames (24 = 0.2 s at
+    120 profiles/s, a fast machine; 180 = 1.5 s, the Pi under load), trimmed after each, and the final pass."""
+    tracker, cloud, found = Tracker(log=lambda *_: None), FrameCloud(), []
+    for i, f in enumerate(frames):
+        cloud.add(f.x_m, f.position_m, f.z_m, f.valid)
+        last = i == len(frames) - 1
+        if (i + 1) % every == 0 or last:
+            found += tracker.feed(cloud.cloud(), f.header.stamp.sec + f.header.stamp.nanosec * 1e-9, final=last)[1]
+            cloud.trim(tracker)
+    return found
+
+
+def match_rows(found, truth, name, tol=3.0):
+    """Each expected centre found exactly once (within tol mm along the scan), nothing else."""
+    ys = sorted(round(f.centre[1] * 1000, 1) for f in found)
+    for y in truth:
+        hits = [v for v in ys if abs(v - y) < tol]
+        assert len(hits) == 1, "%s: expected one at %.1f mm, found %s (all: %s)" % (name, y, hits, ys)
+    extra = [v for v in ys if not any(abs(v - y) < tol for y in truth)]
+    assert not extra, "%s: unexpected at %s (all: %s)" % (name, extra, ys)
+
+
+def test_rows_20261122():
+    """Countersunk holes on a hand-held roll that drifts across the laser line (the last hole of holes1 runs out of
+    the field: partial, never a second or an oversized whole hole), through the laser's glare stripe; on the rivet
+    rows nothing. Fast and Pi-like detection cycles give the same holes."""
+    for bag in ("holes1", "holes2", "rivets", "rivets2"):
+        if not (ROWS_20261122 / bag).exists():
+            print("skip %s: not copied here" % bag)
+            continue
+        for k, frames in enumerate(bag_scans(ROWS_20261122 / bag)):
+            for every in (24, 180):
+                found = replay_scan(frames, every)
+                match_rows(found, HOLE_ROWS.get((bag, k), []), "%s scan %d, cycle %d frames" % (bag, k, every))
+                for h in found:     # top Ø 8.7-9.1 mm; up to 9.8 where a rocked scan line crosses the rim (the
+                    # diameter only draws the map circle: the depth is measured from the centre and the cut-out)
+                    assert h.countersunk, (bag, k, every, round(h.centre[1] * 1000, 1))
+                    assert h.partial or 0.0085 <= 2 * h.radius <= 0.0100, (bag, k, every, round(h.centre[1] * 1000, 1),
+                                                                             2 * h.radius)
+
+
 if __name__ == "__main__":
     test_launch_single_node()
     test_write_failure_fails_the_scan()
@@ -675,6 +759,7 @@ if __name__ == "__main__":
     test_flap_from_frames(test_replay_matches_baseline())
     test_boundary_margin()
     test_panel_bags()
+    test_rows_20261122()
     test_latency()
     test_bag_frames_rebuild()
     print("all checks passed")

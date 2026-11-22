@@ -260,6 +260,7 @@ def rim_coverage(rim_xy, centre, radius, image):
     covered = set(np.floor((angle + np.pi) / (2 * np.pi) * RIM_SECTORS).astype(int) % RIM_SECTORS)
     middle = -np.pi + (np.arange(RIM_SECTORS) + 0.5) * 2 * np.pi / RIM_SECTORS
     u_lo, u_hi = image.get("u_range", (-np.inf, np.inf))     # the laser's field across the scan
+    u_lo, u_hi = u_lo + 2 * image["grid"], u_hi - 2 * image["grid"]   # its ends give no rim points (detect)
     u = centre[0] + radius * np.cos(middle)
     scanned = set(np.flatnonzero(scanned_at(centre[1] + radius * np.sin(middle), image) & (u > u_lo) & (u < u_hi)))
     # Sector k spans angle -pi + k*15deg; +v (scan forward) is +90deg, -v is -90deg.
@@ -351,7 +352,8 @@ def local_normal(centre_2d, surface):
     return n / np.linalg.norm(n)
 
 
-def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False, down=None, known=()):
+def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False, down=None, known=(),
+           hi_is_scan_end=False):
     """Find every hole whose top rim plus ring lies inside [lo + guard, hi - guard] along y.
 
     `points` is the full-resolution crop (N x 3). The guard is dropped at `lo` when that is
@@ -371,26 +373,30 @@ def detect(points, p, lo=-np.inf, hi=np.inf, log=print, lo_is_scan_start=False, 
         log("no top surface in this crop")
         return None
     lo_limit = lo if lo_is_scan_start else lo + p["guard"]
+    hi_limit = hi if hi_is_scan_end else hi - p["guard"]     # the scan's real end: no more points will come
     surface, uv, depth = found
     on_surface = np.abs(depth) < p["surface_tol"]
     openings, pixels, image = find_openings(uv, on_surface, p)
     image["u_range"] = (uv[:, 0].min(), uv[:, 0].max())
+    # The ends of the laser line are straight cuts, not rim: a hole running out of the field is fitted on the
+    # rim it shows (and flagged partial by rim_coverage), not on the field's edge.
+    in_field = (uv[:, 0] > image["u_range"][0] + 2 * p["grid"]) & (uv[:, 0] < image["u_range"][1] - 2 * p["grid"])
     ys = points[:, 1]
     holes, rejected = [], []
     for region in openings:
         rim_image = ndimage.binary_dilation(region, iterations=2) & ~region
         # Band edges are straight cuts, not rim.
-        rim = on_surface & rim_image[pixels[:, 0], pixels[:, 1]] & ~image["unscanned"][pixels[:, 1]]
+        rim = on_surface & rim_image[pixels[:, 0], pixels[:, 1]] & ~image["unscanned"][pixels[:, 1]] & in_field
         fitted = fit_rim(uv[rim])
         if fitted is None:
             continue
         centre_2d, radius, rms, rim_xy = fitted
         centre = to_3d(centre_2d, 0.0, surface)
         reach = radius + p["ring"]
-        if centre[1] - reach < lo_limit or centre[1] + reach > hi - p["guard"]:
+        if centre[1] - reach < lo_limit or centre[1] + reach > hi_limit:
             continue                                   # not fully scanned (or at the crop's open end)
-        if any(np.linalg.norm(centre - c) < p["dedupe_tol"] and abs(radius - r) * 2 < p["dedupe_tol"] for c, r in known):
-            continue                                   # reported already
+        if any(np.linalg.norm(centre[:2] - c[:2]) < max(p["dedupe_tol"], radius + r) for c, r in known):
+            continue                                   # reported already (holes never overlap)
 
         def reject(reason):
             log("skip gap at y=%.1f mm: %s" % (centre[1] * 1000, reason))
@@ -512,7 +518,7 @@ class Tracker:
         self.voxel_keys = np.empty((0, 3), np.int64)   # their voxel indices
         self.voxel_row = -np.inf   # rows below this index are in `voxels`
 
-    def feed(self, points, stamp):
+    def feed(self, points, stamp, final=False):
         """Process one cumulative cloud. Returns (was_reset, new_holes).
 
         Afterwards `strip` holds the surface scanned since the last strip, up to `guard` behind the
@@ -547,7 +553,7 @@ class Tracker:
         overlap = p["max_diam"] / 2 + p["ring"] + p["guard"]
         crop_lo = self.done_y - overlap
         crop = points[y > crop_lo]
-        found = detect(crop, p, crop[:, 1].min(), frontier, self.log, lo_is_scan_start=crop_lo < self.start_y,
+        found = detect(crop, p, crop[:, 1].min(), frontier, self.log, lo_is_scan_start=crop_lo < self.start_y, hi_is_scan_end=final,
                        down=self.downsample(crop, frontier),
                        known=[(h.centre * [s, s, 1], h.radius) for h in self.holes]) if len(crop) > 1000 else None
         if found is None:
@@ -556,8 +562,11 @@ class Tracker:
         if s < 0:
             holes, rejected, self.view = mirror_back(holes), mirror_back(rejected), mirror_view(self.view)
         down, depth = self.view["points"], self.view["depth"]
-        new = [hole for hole in holes if not self.seen(hole, self.holes)]
-        for hole in new:
+        new = []
+        for hole in holes:                         # one by one: a crop can also hold the same hole twice
+            if self.seen(hole, self.holes):
+                continue
+            new.append(hole)
             hole.id = len(self.holes) + 1
             self.holes.append(hole)
             # A gap rejected on an earlier crop can pass on a later one: it is a hole now.
@@ -635,9 +644,10 @@ class Tracker:
         self.bands.append(band)
 
     def seen(self, item, others):
-        """Same hole: centres and diameters agree within dedupe_tol."""
+        """Same hole: centres within dedupe_tol, or the two would overlap (holes never do: a second
+        measurement of a hole, off in size or centre, is not a new hole)."""
         tol = self.p["dedupe_tol"]
-        return any(np.linalg.norm(item.centre - old.centre) < tol and abs(item.radius - old.radius) * 2 < tol
+        return any(np.linalg.norm(item.centre[:2] - old.centre[:2]) < max(tol, item.radius + old.radius)
                    for old in others)
 
 

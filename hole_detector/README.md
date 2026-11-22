@@ -72,6 +72,11 @@ Parameters are in `config/params.yaml` (mm). Each cloud logs its timing: `conver
 | `max_depth` | Deepest point counted, for the hole tests and the boundary cut (mm) |
 | `boundary_margin` | Width of the saved boundary cut-out around the top rim (mm, default 5). Output only: the accepted holes and their measurements do not change; only `/holes/boundary` and the saved `hole_NN.pcd` do. Complete up to `ring` + `guard` = 8 mm, except for a hole at the very start of the scan (nothing was scanned before it); wider cut-outs can be clipped at the crop ends |
 
+**Laser field's edge.** The ends of the laser line are straight cuts, not rim: rim points within 0.6 mm of them
+are left out, and a hole running out of the field is measured on the rim it shows and flagged `partial`. A second
+measurement of a hole (off in size or centre) is never a new hole: holes never overlap. The final pass (stream
+closed, every frame in) decides holes up to the scan's last line, without the guard.
+
 **Unscanned bands.** The stitched cloud can drop whole scan lines (on the Pi, `flap1_05112026`). Lines with under 20% of the median point count are "unscanned". They are filled from their neighbours, so a band is never taken for a hole, and rim points next to them are ignored. A hole a band cuts through is still measured from the rest of its rim and flagged `partial`. A hole mostly inside a band can't be measured.
 
 ## Test
@@ -81,6 +86,8 @@ python3 /bags/hole_detector/test/test_detector.py
 ```
 
 The test checks:
+- the rows of 2026-11-22 (`test_rows_20261122`, bags `pi_20261122/` under `HHRP_BAGS`): 35 countersinks in 2 scans,
+  each exactly once (the field-edge one partial), at 0.2 s and 1.5 s cycles; none on the 6 rivet scans;
 - a synthetic plate: plain, countersunk and blind holes (3–26 mm), a band through one hole and beside another, and a dent. Every hole is found once with the right type and partial flag, the dent is not, and the result is the same when fed incrementally;
 - holes per scan on every real bag (csk_1–3, holes_1, flap), from `/scan/cloud_view`;
 - the flap from `/scan/frame` through the node's frame buffer: 20 holes, each once;

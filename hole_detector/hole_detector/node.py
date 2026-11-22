@@ -131,7 +131,8 @@ class HoleDetector(Node):
             xyz, header, scan = self.frames.cloud(), self.last_frame, self.scan
         if ended is not None:                              # finish the old scan, then start afresh
             if ended[0] is not None:
-                self.process(ended[0], self.stamp_of(ended[1]), Header(stamp=ended[1].stamp, frame_id="laser"), t0)
+                self.process(ended[0], self.stamp_of(ended[1]), Header(stamp=ended[1].stamp, frame_id="laser"), t0,
+                             final=True)
             self.tracker.reset()
             self.new_scan(Header(stamp=header.stamp, frame_id="laser"))
         self.process(xyz, self.stamp_of(header), Header(stamp=header.stamp, frame_id="laser"), t0)
@@ -240,10 +241,22 @@ class HoleDetector(Node):
         n = closed.frame_count
         if have > n or top >= n:
             self.finalize_job(job, False, "received frames beyond the %d declared" % n)
-        elif have == n:                            # every frame 0..n-1 is in and processed: the final pass ran
+        elif have == n:                            # every frame 0..n-1 is in and processed: one final pass
+            self.final_pass(job)
             self.finalize_job(job, not closed.error, ("frame stream: " + closed.error) if closed.error else "")
         elif time.monotonic() - job.closed_at > self.get_parameter("final_wait_s").value:
             self.finalize_job(job, False, "missing frames: %d of %d never arrived" % (n - have, n))
+
+    def final_pass(self, job):
+        """The scan's last cycle: every frame is in, so features up to the last scanned line are decided."""
+        with self.lock:
+            xyz, header = job.frames.cloud(), job.header
+        if header is None or len(xyz) == 0:
+            return
+        t0 = time.time()
+        self.tracker, self.folder.path, self.job = job.tracker, job.path, job
+        self.process(xyz, self.stamp_of(header), Header(stamp=header.stamp, frame_id="laser"), t0, final=True)
+        self.job = None
 
     def finalize_job(self, job, success, error):
         self.folder.close()                        # every queued CSV row and PCD is on disk first
@@ -285,9 +298,11 @@ class HoleDetector(Node):
         stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.process(xyz.astype(np.float64), stamp, msg.header, t0)
 
-    def process(self, xyz, stamp, header, t0):
+    def process(self, xyz, stamp, header, t0, final=False):
+        """One detection cycle. final: the scan has ended and every frame is in, so features up to its last
+        line are decided (no guard for points still to come)."""
         t1 = time.time()
-        was_reset, new = self.tracker.feed(xyz, stamp)
+        was_reset, new = self.tracker.feed(xyz, stamp, final=final)
         t2 = time.time()
         if was_reset:
             self.new_scan(header)
