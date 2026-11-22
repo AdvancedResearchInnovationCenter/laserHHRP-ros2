@@ -70,7 +70,11 @@
     # Direction of z in the detector's PCDs, set by the scanner's .sc1. false = countersinks / the part lie
     # toward smaller z (test.sc1, scans since 2026-11-10). A wrong value gives "unexpected_shape", not a value.
     inspection.csk_invert_z: false
-    inspection.rivet_invert_z: false
+    inspection.rivet_invert_z: false       # confirmed 2026-11-22 (41 heads: sunk 0-0.06 mm, as their height profile)
+    # The flushness library's own z check reads the groove around a cut mandrel (panel 2). The countersunk rivets
+    # of 2026-11-22 do not show it: with the right z it refused 2 of 3 heads (unexpected_shape). z is fixed by the
+    # .sc1 above, the same for both modes; true again for rivets with that mandrel groove.
+    inspection.rivet_check_orientation: false
     inspection.csk_angle_deg: 130.0        # included countersink angle (input to the CSK fit)
     inspection.csk_bore_diameter_mm: 4.25  # measured bore diameter (input to the CSK fit)
     inspection.workers: 4                  # features measured in parallel (Pi 5: 4 cores)

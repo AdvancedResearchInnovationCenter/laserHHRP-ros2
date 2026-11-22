@@ -40,6 +40,7 @@ A failed detection gets no message (the backend has already failed the scan). An
 | `inspection.csk_depth_min_m` / `_max_m` | 0.000947 / 0.001147 | GO range of the CSK depth (truncated cone height) |
 | `inspection.flushness_min_m` / `_max_m` | -0.00015 / 0.00005 | GO range of the flushness (positive = head proud) |
 | `inspection.csk_invert_z`, `inspection.rivet_invert_z` | false | z direction of the PCDs (scanner `.sc1`); a wrong value gives `unexpected_shape`, not a value |
+| `inspection.rivet_check_orientation` | true (hhrp.yaml: false) | the flushness library's z check (mandrel groove, panel 2); off for rivets without that groove, which it refuses as `unexpected_shape` even with the right z |
 | `inspection.csk_angle_deg` | 130.0 | included countersink angle (input to the CSK fit) |
 | `inspection.csk_bore_diameter_mm` | 4.25 | measured bore diameter (input to the CSK fit) |
 | `inspection.workers` | 4 | features measured in parallel threads (one scan at a time) |

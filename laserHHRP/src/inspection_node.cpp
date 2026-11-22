@@ -51,6 +51,7 @@ class InspectionNode : public rclcpp::Node {
     workers_ = static_cast<int>(declare_parameter("inspection.workers", 4));
     csk_invert_z_ = declare_parameter("inspection.csk_invert_z", false);
     rivet_invert_z_ = declare_parameter("inspection.rivet_invert_z", false);
+    rivet_check_orientation_ = declare_parameter("inspection.rivet_check_orientation", true);
     csk_min_m_ = declare_parameter("inspection.csk_depth_min_m", 0.000947);
     csk_max_m_ = declare_parameter("inspection.csk_depth_max_m", 0.001147);
     flush_min_m_ = declare_parameter("inspection.flushness_min_m", -0.00015);
@@ -173,6 +174,7 @@ class InspectionNode : public rclcpp::Node {
     } else {
 #ifdef LASER_HHRP_HAS_RIVET_FLUSHNESS
       rivet_flushness::Params p;
+      p.check_orientation = rivet_check_orientation_;
       std::string note;
       p.log = [&note](int, const std::string& text) { note = text; };
       rivet_flushness::Measurement m = rivet_flushness::measure_rivet_flushness(
@@ -297,7 +299,7 @@ class InspectionNode : public rclcpp::Node {
   }
 
   int workers_ = 4;
-  bool csk_invert_z_ = false, rivet_invert_z_ = false, write_csv_ = true;
+  bool csk_invert_z_ = false, rivet_invert_z_ = false, rivet_check_orientation_ = true, write_csv_ = true;
   double csk_min_m_ = 0, csk_max_m_ = 0, flush_min_m_ = 0, flush_max_m_ = 0, csk_angle_deg_ = 130, csk_bore_mm_ = 4.25;
   rclcpp::Publisher<msg::MeasurementFinalized>::SharedPtr pub_;
   rclcpp::Subscription<msg::DetectionFinalized>::SharedPtr sub_;
